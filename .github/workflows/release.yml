@@ -1,0 +1,31 @@
+name: Release
+
+# Publishes to PyPI when a version tag is pushed. Uses PyPI Trusted Publishing: no token is
+# stored; register this repository and workflow as a trusted publisher on PyPI first.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv python install 3.12
+      - uses: oven-sh/setup-bun@v2
+      - run: uv sync --locked
+      - run: make smoke
+      # PyPI renders the README without the repository around it: point its links at the tag.
+      - name: Absolute links for the package page
+        run: |
+          raw="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}"
+          blob="https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}"
+          sed -i -E "s#(src|srcset)=\"assets/#\1=\"${raw}/assets/#g" README.md
+          sed -i -E "s#\]\((LICENSE|CONTRIBUTING|CHANGELOG|MANUAL)#](${blob}/\1#g" README.md
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

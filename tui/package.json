@@ -1,0 +1,24 @@
+{
+  "name": "@trading_r1/tui",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Terminal UI for Trading-R1: OpenTUI + Solid client over the /research HTTP+SSE API.",
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "dev": "bun --conditions=browser src/index.tsx",
+    "start": "bun --conditions=browser src/index.tsx",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.8.2",
+    "@opentui/solid": "^0.8.2",
+    "solid-js": "^1.9.18"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4"
+  }
+}

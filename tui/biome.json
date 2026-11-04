@@ -1,0 +1,9 @@
+{
+  "files": { "includes": ["**/*.ts", "**/*.tsx", "!src/lib/events.gen.ts"] },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
+  "javascript": {
+    "formatter": { "semicolons": "asNeeded", "quoteStyle": "double", "trailingCommas": "all" }
+  },
+  "linter": { "enabled": false },
+  "assist": { "enabled": false }
+}

@@ -1,0 +1,25 @@
+name: Bug
+description: Something does not work.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `trading-r1 --version`.
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: The model in use, and your operating system.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened. Remove keys and anything private.
+    validations:
+      required: true

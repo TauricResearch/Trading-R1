@@ -1,0 +1,5 @@
+# OpenTUI's Solid JSX transform runs as a Bun preload plugin.
+preload = ["@opentui/solid/preload"]
+
+[test]
+preload = ["@opentui/solid/preload"]

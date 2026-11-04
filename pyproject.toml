@@ -1,0 +1,74 @@
+[project]
+name = "trading-r1"
+version = "0.1.0"
+description = "The terminal for financial research and analysis: an agent over market data, web research and compute tools for valuation, risk, portfolio, fixed income and derivatives."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "trading_r1/report/fonts/OFL.txt"]
+authors = [{ name = "Tauric Research" }]
+keywords = ["finance", "research", "agent", "terminal", "llm", "valuation", "quantitative"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "openai>=3.44.0",
+    "google-genai>=2.34.0",
+    "pydantic>=2.14.2",
+    "httpx>=0.28.1",
+    "ddgs>=9.16.1",
+    "trafilatura>=2.3.1",
+    "pdfplumber>=0.11.10",
+    "pyyaml>=6.0.3",
+    "fastapi>=0.162.0",
+    "uvicorn>=0.54.0",
+    "numpy>=2.5.4",
+    "scipy>=1.18.1",
+    "anthropic>=2.4.0",
+    "markdown-it-py>=4.2.0",
+    "cronsim>=2.7",
+    "reportlab>=5.1.0",
+    "svgelements>=1.9.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/TauricResearch/Trading-R1"
+Issues = "https://github.com/TauricResearch/Trading-R1/issues"
+
+[project.scripts]
+trading-r1 = "trading_r1.cli:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trading_r1"]
+
+# The Bun TUI ships inside the wheel (at trading_r1/_tui/) so an installed `trading-r1` can
+# launch the interactive UI. Only the runtime files: src, the configs bun reads
+# (package.json/tsconfig/bunfig) and the lockfile for first-run install. node_modules stays out
+# (deps install on first run).
+[tool.hatch.build.targets.wheel.force-include]
+"tui/src" = "trading_r1/_tui/src"
+"tui/package.json" = "trading_r1/_tui/package.json"
+"tui/tsconfig.json" = "trading_r1/_tui/tsconfig.json"
+"tui/bunfig.toml" = "trading_r1/_tui/bunfig.toml"
+"tui/bun.lock" = "trading_r1/_tui/bun.lock"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

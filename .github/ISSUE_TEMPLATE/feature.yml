@@ -1,0 +1,11 @@
+name: Feature
+description: Something it should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want to do
+      description: The task, and what gets in the way today.
+    validations:
+      required: true
