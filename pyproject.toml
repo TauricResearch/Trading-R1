@@ -1,11 +1,11 @@
 [project]
 name = "trading-r1"
-version = "0.1.0"
+version = "0.1.1"
 description = "The terminal for financial research and analysis: an agent over market data, web research and compute tools for valuation, risk, portfolio, fixed income and derivatives."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-license-files = ["LICENSE", "trading_r1/report/fonts/OFL.txt"]
+license-files = ["LICENSE", "trading_r1/report/fonts/OFL-*.txt"]
 authors = [{ name = "Tauric Research" }]
 keywords = ["finance", "research", "agent", "terminal", "llm", "valuation", "quantitative"]
 classifiers = [

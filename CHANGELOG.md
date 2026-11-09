@@ -1,6 +1,16 @@
 # Changelog
 
-## [0.1.0] (2026-11-04)
+## [0.1.1] - 2026-11-09
+
+- Reports: the PDF is set in Noto Sans, with Noto Sans SC and KR, so it draws Chinese, Japanese
+  and Korean text and common symbols such as currency signs, fractions and arrows.
+- Export: the terminal and `trading-r1 export` both say when a report cannot be a PDF, and offer the
+  HTML page.
+- Formulas are written in Markdown rather than LaTeX.
+- Telegram: a report is titled by its job or Trading-R1 and the day, and a table reads as one line
+  per row.
+
+## [0.1.0] - 2026-11-04
 
 First official release of Trading-R1, the terminal for financial research and analysis by
 [Tauric Research](https://tauric.ai/).

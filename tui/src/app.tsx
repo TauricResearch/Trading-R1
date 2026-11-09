@@ -16,6 +16,7 @@
  * parts timeline the transcript renders; reasoning/token deltas are coalesced on
  * a ~16ms tick. `/` or `^K` open the command palette (commands, mode, sessions, …).
  */
+import { version as packageVersion } from "../package.json"
 import { Show, createSignal, onCleanup, onMount } from "solid-js"
 
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
@@ -662,7 +663,7 @@ function AppInner() {
 
   const model = () => backbone()?.model ?? hp()?.backbone?.model ?? "-"
   const ready = () => hp()?.status === "ok"
-  const version = () => hp()?.version ?? "0.1.0"
+  const version = () => hp()?.version ?? packageVersion
   const composerFocused = () => !dialog.open()
 
   return (

@@ -38,8 +38,8 @@ Open **Settings** from the palette.
 
 ## Reports, channels and jobs
 
-`TR1_REPORTS_DIR` changes the reports folder. Reports the PDF font cannot draw, such as Chinese or
-Japanese, become an HTML page.
+`TR1_REPORTS_DIR` changes the reports folder. When the PDF cannot draw a report's text, the report
+is saved as an HTML page.
 
 ```bash
 trading-r1 channels add telegram
