@@ -3,20 +3,21 @@
 
 """The report as a PDF: the same content as the page, laid out for paper and for a phone's reader.
 
-Built with ReportLab from the answer's markdown, in Open Sans (embedded). No browser or system
-library is involved. The logo is drawn as vectors from
+Built with ReportLab from the answer's markdown, in Noto Sans (embedded), and code in Courier. No
+browser or system library is involved. The logo is drawn as vectors from
 ``logo.svg``. Link rules are the page's: only http(s) targets, and with ``links="cited"`` only
-pages the report cites. Open Sans has the Latin, Greek and Cyrillic alphabets: a report with letters
-or figures outside them raises ``PdfTextError``, since they could not be drawn. Other symbols it
-lacks are left out.
+pages the report cites. Text the font cannot draw is set in the first of Noto Sans, Noto Sans SC
+and Noto Sans KR that can: Latin, Greek, Cyrillic, Chinese, Japanese, Korean and the common
+symbols. A report with letters or figures none of them has raises ``PdfTextError``, since they
+could not be drawn.
 """
 
 from __future__ import annotations
 
 import io
+import itertools
 import re
 import unicodedata
-from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 from xml.sax.saxutils import escape
@@ -35,10 +36,10 @@ from reportlab.platypus import (
     HRFlowable,
     PageTemplate,
     Paragraph,
-    Preformatted,
     Spacer,
     Table,
     TableStyle,
+    XPreformatted,
 )
 from svgelements import SVG, Arc, Close, CubicBezier, Line, Move, QuadraticBezier
 from svgelements import Path as SvgPath
@@ -62,54 +63,96 @@ _LINKS = (
     ("GitHub", "https://github.com/TauricResearch/Trading-R1"),
 )
 _MARGIN = 64  # points; about 90 characters to a line
-_FONTS = (
-    ("OpenSans", "OpenSans-Regular.ttf"),
-    ("OpenSans-Bold", "OpenSans-Bold.ttf"),
-    ("OpenSans-Italic", "OpenSans-Italic.ttf"),
-    ("OpenSans-BoldItalic", "OpenSans-BoldItalic.ttf"),
-)
+# The type: Noto Sans, with Noto Sans SC and KR for what it lacks (Chinese, Japanese, Korean).
+# A family's name is its regular face; the CJK families have no italic, so their italic is upright.
+_FAMILIES = {
+    "NotoSans": ("Regular", "Bold", "Italic", "BoldItalic"),
+    "NotoSansSC": ("Regular", "Bold"),
+    "NotoSansKR": ("Regular", "Bold"),
+}
+_FALLBACK = tuple(_FAMILIES)  # in this order, for what the text's font (or Courier) cannot draw
+_CODE_SIZE = 8.5
+_CODE_WIDTH = LETTER[0] - 2 * _MARGIN - 10  # the frame less the code block's padding
+# the font -> the code points it draws, once the fonts are registered
+_DRAWS: dict[str, frozenset[int]] = {}
 
 
 def _register_fonts() -> None:
-    if "OpenSans" in pdfmetrics.getRegisteredFontNames():
+    if _DRAWS:
         return
-    for name, file in _FONTS:
-        pdfmetrics.registerFont(TTFont(name, str(_HERE / "fonts" / file)))
-    pdfmetrics.registerFontFamily(
-        "OpenSans",
-        normal="OpenSans",
-        bold="OpenSans-Bold",
-        italic="OpenSans-Italic",
-        boldItalic="OpenSans-BoldItalic",
-    )
+    for name, styles in _FAMILIES.items():
+        faces = {style: name if style == "Regular" else f"{name}-{style}" for style in styles}
+        for style, face in faces.items():
+            pdfmetrics.registerFont(TTFont(face, str(_HERE / "fonts" / f"{name}-{style}.ttf")))
+        pdfmetrics.registerFontFamily(
+            name,
+            normal=faces["Regular"],
+            bold=faces["Bold"],
+            italic=faces.get("Italic", faces["Regular"]),
+            boldItalic=faces.get("BoldItalic", faces["Bold"]),
+        )
+        _DRAWS[name] = frozenset(pdfmetrics.getFont(name).face.charToGlyph)
+    # Courier is a standard PDF font: it draws the Windows-1252 characters
+    _DRAWS["Courier"] = frozenset(map(ord, bytes(range(32, 256)).decode("cp1252", "ignore")))
+
+
+def _font_for(char: str, base: str) -> str | None:
+    """The font that draws ``char`` when ``base`` does not; None when base does, or none does."""
+    if char in "\n\t" or ord(char) in _DRAWS[base]:
+        return None
+    return next((name for name in _FALLBACK if ord(char) in _DRAWS[name]), None)
+
+
+def _code_lines(line: str) -> list[str]:
+    """A code line broken where it would pass the page's edge, every character kept."""
+    parts, part, width = [], "", 0.0
+    for char in line:
+        face = _font_for(char, "Courier") or "Courier"
+        step = pdfmetrics.stringWidth(char, face, _CODE_SIZE)
+        if part and width + step > _CODE_WIDTH:
+            parts.append(part)
+            part, width = "", 0.0
+        part, width = part + char, width + step
+    return [*parts, part]
+
+
+def _set(text: str, base: str = "NotoSans", bold: bool = False) -> str:
+    """Plain text as paragraph markup: escaped, each run ``base`` cannot draw in a font that can
+    (its bold face for ``bold`` text: a named font does not take the paragraph's bold)."""
+    out: list[str] = []
+    for font, run in itertools.groupby(text, key=lambda c: _font_for(c, base)):
+        chars = escape("".join(run))
+        face = f"{font}-Bold" if font and bold else font
+        out.append(f'<font name="{face}">{chars}</font>' if face else chars)
+    return "".join(out)
 
 
 def _styles() -> dict[str, ParagraphStyle]:
-    base = {"fontName": "OpenSans", "textColor": _INK, "fontSize": 10, "leading": 15}
+    base = {"fontName": "NotoSans", "textColor": _INK, "fontSize": 10, "leading": 15}
 
     def make(name: str, **kw) -> ParagraphStyle:
         return ParagraphStyle(name, **{**base, **kw})
 
     return {
         "body": make("body", spaceAfter=7),
-        "h1": make("h1", fontName="OpenSans-Bold", fontSize=20, leading=25, spaceBefore=4,
+        "h1": make("h1", fontName="NotoSans-Bold", fontSize=20, leading=25, spaceBefore=4,
                    spaceAfter=8, keepWithNext=1),
-        "h2": make("h2", fontName="OpenSans-Bold", fontSize=13.5, leading=18, spaceBefore=3,
+        "h2": make("h2", fontName="NotoSans-Bold", fontSize=13.5, leading=18, spaceBefore=3,
                    spaceAfter=5, keepWithNext=1),
-        "h3": make("h3", fontName="OpenSans-Bold", fontSize=11, leading=15, spaceBefore=10,
+        "h3": make("h3", fontName="NotoSans-Bold", fontSize=11, leading=15, spaceBefore=10,
                    spaceAfter=3, keepWithNext=1),
-        "kicker": make("kicker", fontName="OpenSans-Bold", fontSize=7.5, leading=10,
+        "kicker": make("kicker", fontName="NotoSans-Bold", fontSize=7.5, leading=10,
                        textColor=_BRANDINK, spaceAfter=3),
-        "question": make("question", fontName="OpenSans-Italic", fontSize=11, leading=15,
+        "question": make("question", fontName="NotoSans-Italic", fontSize=11, leading=15,
                          textColor=_MUTED, spaceAfter=6),
         "meta": make("meta", fontSize=8, leading=11.5, textColor=_MUTED),
-        "quote": make("quote", leftIndent=14, textColor=_MUTED, fontName="OpenSans-Italic"),
+        "quote": make("quote", leftIndent=14, textColor=_MUTED, fontName="NotoSans-Italic"),
         "cell": make("cell", fontSize=8.5, leading=11.5, spaceAfter=0),
-        "cellhead": make("cellhead", fontName="OpenSans-Bold", fontSize=8, leading=11,
+        "cellhead": make("cellhead", fontName="NotoSans-Bold", fontSize=8, leading=11,
                          textColor=_MUTED, spaceAfter=0),
         "source": make("source", fontSize=8.5, leading=12, leftIndent=18, spaceAfter=2),
         "small": make("small", fontSize=8, leading=11.5, textColor=_MUTED),
-        "code": ParagraphStyle("code", fontName="Courier", fontSize=8.5, leading=12,
+        "code": ParagraphStyle("code", fontName="Courier", fontSize=_CODE_SIZE, leading=12,
                                textColor=_INK, backColor=_WASH, borderPadding=5),
     }  # fmt: skip
 
@@ -185,28 +228,32 @@ class _Builder:
     def __init__(self, known: set[int], cited: frozenset[str] | None) -> None:
         self.known, self.cited, self.s = known, cited, _styles()
 
-    def _text(self, content: str, in_link: bool) -> str:
+    def _text(self, content: str, in_link: bool, bold: bool) -> str:
         out, pos = [], 0
         for m in MARKER.finditer(content):
             if in_link or int(m.group(1)) not in self.known:
                 continue
-            out.append(escape(content[pos : m.start()]))
+            out.append(_set(content[pos : m.start()], bold=bold))
             out.append(f'<a href="#src-{m.group(1)}" color="#1c5d99">{m.group(0)}</a>')
             pos = m.end()
-        return "".join(out) + escape(content[pos:])
+        return "".join(out) + _set(content[pos:], bold=bold)
 
-    def inline(self, token: Token) -> str:
+    def inline(self, token: Token, bold: bool = False) -> str:
+        """The token's text as paragraph markup; ``bold`` when its style is bold."""
         tags = {"strong_open": "<b>", "strong_close": "</b>", "em_open": "<i>", "em_close": "</i>",
                 "s_open": "<strike>", "s_close": "</strike>"}  # fmt: skip
         out: list[str] = []
         links: list[bool] = []
+        strong = 0
         for c in token.children or ():
             if c.type in tags:
                 out.append(tags[c.type])
+                strong += {"strong_open": 1, "strong_close": -1}.get(c.type, 0)
             elif c.type == "text":
-                out.append(self._text(c.content, bool(links)))
+                out.append(self._text(c.content, bool(links), bold or strong > 0))
             elif c.type == "code_inline":
-                out.append(f'<font face="Courier" size="9">{escape(c.content)}</font>')
+                code = _set(c.content, "Courier", bold or strong > 0)
+                out.append(f'<font face="Courier" size="9">{code}</font>')
             elif c.type in ("softbreak", "hardbreak"):
                 out.append("<br/>" if c.type == "hardbreak" else " ")
             elif c.type == "link_open":
@@ -228,13 +275,15 @@ class _Builder:
             if t.type == "heading_open":
                 level = min(int(t.tag[1:]), 3)
                 if level == 2:
-                    out.append(_heading(self.inline(tokens[i + 1]), self.s)[0])
-                out.append(Paragraph(self.inline(tokens[i + 1]), self.s[f"h{level}"]))
+                    out.append(_heading(self.inline(tokens[i + 1], bold=True), self.s)[0])
+                out.append(Paragraph(self.inline(tokens[i + 1], bold=True), self.s[f"h{level}"]))
             elif t.type == "paragraph_open":
                 style = self.s["quote"] if depth < 0 else self.s["body"]
                 out.append(Paragraph(self.inline(tokens[i + 1]), style))
             elif t.type in ("fence", "code_block"):
-                out.append(Preformatted(t.content.rstrip(), self.s["code"], maxLineLength=96))
+                lines = t.content.rstrip().splitlines() or [""]
+                wrapped = "\n".join(part for line in lines for part in _code_lines(line))
+                out.append(XPreformatted(_set(wrapped, "Courier"), self.s["code"]))
                 out.append(Spacer(1, 6))
             elif t.type in ("bullet_list_open", "ordered_list_open"):
                 end = _end(tokens, i)
@@ -316,7 +365,7 @@ class _Builder:
                 style = ParagraphStyle(
                     "c", parent=self.s["cellhead" if head else "cell"], alignment=align
                 )
-                cells.append(Paragraph(self.inline(c), style))
+                cells.append(Paragraph(self.inline(c, bold=head), style))
             data.append(cells + [""] * (ncols - len(cells)))
         table = Table(data, colWidths=cols, repeatRows=1 if heads and heads[0] else 0)
         table.setStyle(_TABLE)
@@ -350,14 +399,14 @@ def _end(tokens: list[Token], start: int) -> int:
 def _footer(canvas, doc) -> None:
     w = LETTER[0]
     canvas.saveState()
-    canvas.setFont("OpenSans", 7.5)
+    canvas.setFont("NotoSans", 7.5)
     canvas.setFillColor(_MUTED)
     canvas.drawString(_MARGIN, 30, f"Trading-R1, page {doc.page}")
     x = w - _MARGIN
-    canvas.setFont("OpenSans-Bold", 7.5)
+    canvas.setFont("NotoSans-Bold", 7.5)
     canvas.setFillColor(_BRANDINK)
     for name, url in reversed(_LINKS):
-        width = pdfmetrics.stringWidth(name, "OpenSans-Bold", 7.5)
+        width = pdfmetrics.stringWidth(name, "NotoSans-Bold", 7.5)
         canvas.drawString(x - width, 30, name)
         canvas.linkURL(url, (x - width, 27, x, 38), relative=0)
         x -= width + 14
@@ -368,8 +417,6 @@ class PdfTextError(ValueError):
     """The report has text the PDF's font cannot draw."""
 
 
-# Symbols the font lacks that carry meaning, as plain text.
-_PLAIN = str.maketrans({"→": "->", "←": "<-", "↑": "up ", "↓": "down ", "▲": "up ", "▼": "down "})
 # Letters, digits and currency signs: a page without them says something else.
 _MUST_DRAW = ("L", "N", "Sc")
 
@@ -387,7 +434,7 @@ def _drawn_text(snap: ReportSnapshot) -> str:
 
 def _check_text(snap: ReportSnapshot) -> None:
     """Refuse a report whose words or figures would come out blank."""
-    drawn = pdfmetrics.getFont("OpenSans").face.charToGlyph
+    drawn = frozenset().union(*_DRAWS.values())
     missing = sorted(
         {
             c
@@ -397,7 +444,7 @@ def _check_text(snap: ReportSnapshot) -> None:
     )
     if missing:
         raise PdfTextError(
-            f"the PDF's font cannot draw this report's text ({''.join(missing[:5])}…)"
+            f"the PDF's fonts cannot draw this report's text ({''.join(missing[:5])}…)"
         )
 
 
@@ -405,7 +452,6 @@ def render_pdf(snap: ReportSnapshot, *, links: Literal["web", "cited"] = "web") 
     """The report as a PDF document; ``links`` as for ``render_html``. Raises ``PdfTextError``
     when the font cannot draw its text."""
     _register_fonts()
-    snap = replace(snap, answer=snap.answer.translate(_PLAIN))
     _check_text(snap)
     cited = link_scope(snap, links)
     b = _Builder({s.index for s in snap.sources}, cited)
@@ -434,8 +480,8 @@ def render_pdf(snap: ReportSnapshot, *, links: Literal["web", "cited"] = "web") 
         _Logo(30),
         Spacer(1, 14),
         Paragraph("RESEARCH REPORT", s["kicker"]),
-        Paragraph(escape(snap.question), s["question"]),
-        Paragraph(escape(facts), s["meta"]),
+        Paragraph(_set(snap.question), s["question"]),
+        Paragraph(_set(facts), s["meta"]),
         HRFlowable(width="100%", thickness=0.6, color=_RULE, spaceBefore=8, spaceAfter=10),
     ]
     tokens = markdown().parse(snap.answer)
@@ -443,7 +489,7 @@ def render_pdf(snap: ReportSnapshot, *, links: Literal["web", "cited"] = "web") 
     if snap.sources:
         story += _heading("Sources", s)
         for src in snap.sources:
-            label = escape(src.title or src.url)
+            label = _set(src.title or src.url)
             link = link_allowed(src.url, cited)
             body = f'<a href="{escape(src.url)}" color="#1c5d99">{label}</a>' if link else label
             story.append(Paragraph(f'<a name="src-{src.index}"/>{body}', s["source"],
@@ -452,8 +498,8 @@ def render_pdf(snap: ReportSnapshot, *, links: Literal["web", "cited"] = "web") 
         story += _heading("Data", s)
         rows = [[Paragraph(h, s["cellhead"]) for h in ("Record", "Call", "Source", "As of")]]
         for r in snap.data:
-            asof = escape(r.as_of) + ("" if r.ok else ", failed")
-            rows.append([Paragraph(escape(x), s["cell"]) for x in (r.label, r.call, r.source)]
+            asof = _set(r.as_of) + ("" if r.ok else ", failed")
+            rows.append([Paragraph(_set(x), s["cell"]) for x in (r.label, r.call, r.source)]
                         + [Paragraph(asof, s["cell"])])  # fmt: skip
         width = LETTER[0] - 2 * _MARGIN
         table = Table(rows, colWidths=[width * f for f in (0.09, 0.5, 0.18, 0.23)], repeatRows=1)
