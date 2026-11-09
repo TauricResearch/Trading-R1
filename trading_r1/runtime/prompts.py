@@ -105,8 +105,9 @@ _OUTPUT = """\
 
 Put the point first (the verdict, the number, the direct response) and give the rest the \
 shape and length the question calls for. Figures compared across items or periods read best in a \
-table. When the user asks for something short, a brief or a \
-length, that shapes the whole message: give them what they asked for at that length, keeping \
+table. Replies are Markdown, e.g. a formula as `Ke = Rf + beta x ERP`. When the user asks \
+for something short, a brief or a length, that shapes the whole message: give them what they \
+asked for at that length, keeping \
 the figures they asked for. Place inline `[N]` markers next to \
 each claim drawn from a source you read: a single `[3]` or a co-citation `[1, 4]` (e.g. \
 "Q4 revenue was $94.9B [3]"); a source keeps its number for the whole conversation, and the \
