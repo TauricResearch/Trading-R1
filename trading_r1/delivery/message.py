@@ -45,6 +45,7 @@ class ReportText:
     more: int  # sources left out of ``sources``
     footer: str  # the disclaimer
     attached: bool = True  # a file goes with the message
+    title: str = ""  # who sent it and when: ``<job or Trading-R1> <date>``; none for a chat reply
 
     @property
     def more_note(self) -> str:
@@ -101,10 +102,14 @@ def _headline(snapshot: ReportSnapshot, allowed: frozenset[str]) -> str:
     return text if len(text) <= 80 else text[:79].rsplit(" ", 1)[0] + "…"
 
 
+def _title(snapshot: ReportSnapshot, label: str) -> str:
+    """``<job or Trading-R1> <date>``."""
+    return " ".join(p for p in (label, snapshot.created[:10]) if p)
+
+
 def _subject(snapshot: ReportSnapshot, label: str, allowed: frozenset[str]) -> str:
-    """``<job or Trading-R1> <date>: <headline>``: a mailbox can be filtered by its label."""
-    head = " ".join(p for p in (label, snapshot.created[:10]) if p)
-    return f"{head}: {_headline(snapshot, allowed)}"[:160]
+    """``<title>: <headline>``: a mailbox can be filtered by its label."""
+    return f"{_title(snapshot, label)}: {_headline(snapshot, allowed)}"[:160]
 
 
 REPORT_HTML = "trading-r1-report.html"
@@ -169,7 +174,8 @@ def report_message(
     if "pdf" in formats and not any(a.name == REPORT_PDF for a in files):
         footer = f"This report could not be made as a PDF. {DISCLAIMER}"
     # a reply in a chat (no files) has no subject line: it is a message, not a mailing
-    subject = _subject(snapshot, name if job else "Trading-R1", allowed) if formats else ""
+    label = name if job else "Trading-R1"
+    subject = _subject(snapshot, label, allowed) if formats else ""
     message = Message(subject, "", files, name)
     report = ReportText(
         snapshot.answer,
@@ -178,6 +184,7 @@ def report_message(
         max(len(snapshot.sources) - listed, 0),
         footer,
         attached=bool(message.sendable()),
+        title=_title(snapshot, label) if formats else "",
     )
     body = plain_text(snapshot.answer, allowed).strip()
     if sources:

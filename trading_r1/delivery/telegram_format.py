@@ -104,6 +104,11 @@ def _list(tokens: list[Token], start: int, allowed: frozenset[str], depth: int) 
     return lines
 
 
+# a cell that is a figure: a number, perhaps signed, approximate or in a currency
+_TAG = re.compile(r"<[^>]+>")
+_FIGURE = re.compile(r"[~≈+\-−]?[$€£¥]?\d")
+
+
 def _table(tokens: list[Token], start: int, allowed: frozenset[str]) -> str:
     end = _end(tokens, start)
     rows: list[list[str]] = []
@@ -112,10 +117,27 @@ def _table(tokens: list[Token], start: int, allowed: frozenset[str]) -> str:
             rows.append([])
         elif tokens[i].type == "inline":
             rows[-1].append(_inline(tokens[i], allowed))
-    lines = [" / ".join(r) for r in rows]
-    if lines:
-        lines[0] = f"<b>{lines[0]}</b>"
-    return "\n".join(lines)
+    if not rows:
+        return ""
+    names = rows[0]
+    if len(rows) == 1:
+        return f"<b>{', '.join(n for n in names if n)}</b>"
+    # a phone has no room for columns: each row is one line, each cell after its column's name.
+    # A first column of labels (no name of its own, or holding words, not figures) leads in bold.
+    labelled = not names[0] or not any(
+        _FIGURE.match(_TAG.sub("", row[0])) for row in rows[1:] if row
+    )
+    lines = []
+    for row in rows[1:]:
+        first = 1 if labelled else 0
+        cells = [
+            f"{names[j]} {cell}" if j < len(names) and names[j] else cell
+            for j, cell in enumerate(row[first:], start=first)
+            if cell
+        ]
+        head = f"<b>{row[0]}</b>" if labelled and row and row[0] else ""
+        lines.append(": ".join(p for p in (head, ", ".join(cells)) if p))
+    return "\n".join(line for line in lines if line)
 
 
 def _blocks(tokens: list[Token], allowed: frozenset[str]) -> list[str]:
@@ -152,16 +174,13 @@ def telegram_blocks(markdown: str, allowed: frozenset[str]) -> list[str]:
 
 
 def report_blocks(message: Message) -> tuple[str, ...]:
-    """A report message as Telegram HTML blocks: the subject, the answer (without its own title
-    line when a subject carries it), the sources and the notice. A message that is not a report
-    gives none."""
+    """A report message as Telegram HTML blocks: its title (who sent it and when), the answer,
+    the sources and the notice. A message that is not a report gives none."""
     report = message.report
     if report is None:
         return ()
     blocks = telegram_blocks(report.answer, report.allowed)
-    if message.subject and report.answer.lstrip().startswith("# "):
-        blocks = blocks[1:]
-    out = [f"<b>{html.escape(message.subject, quote=False)}</b>"] if message.subject else []
+    out = [f"<b>{html.escape(report.title, quote=False)}</b>"] if report.title else []
     out += blocks
     if report.sources:
         rows = "\n".join(
