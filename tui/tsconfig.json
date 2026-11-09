@@ -12,6 +12,7 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": false,
     "noEmit": true
   },
