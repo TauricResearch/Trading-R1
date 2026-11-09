@@ -1,6 +1,6 @@
 [project]
 name = "trading-r1"
-version = "0.1.0"
+version = "0.1.1"
 description = "The terminal for financial research and analysis: an agent over market data, web research and compute tools for valuation, risk, portfolio, fixed income and derivatives."
 readme = "README.md"
 requires-python = ">=3.12"
