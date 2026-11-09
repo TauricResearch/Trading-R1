@@ -13,6 +13,14 @@ export function shortPath(path: string, home = homedir()): string {
   return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
+/** What a saved report says: a report the PDF could not be made for is an HTML page instead. */
+export function savedNotice(dir: string, files: string[], home = homedir()): string {
+  const where = shortPath(dir, home)
+  return files.some((name) => name.endsWith(".pdf"))
+    ? `Report saved: ${where}`
+    : `No PDF could be made for this report, so it is saved as an HTML page: ${where}`
+}
+
 export function createReportExport({ host, dialog, once, choose, nav }: Flow) {
   /** Save a session's report as files: into the reports folder, or a folder the owner chooses
    *  (the system's dialog where there is one, else a name or path typed). */
@@ -21,7 +29,7 @@ export function createReportExport({ host, dialog, once, choose, nav }: Flow) {
     const save = async (dir?: string) => {
       const mine = nav()
       const r = await saveReport(sessionId, dir)
-      if (r.ok) return host.notify(`Report saved: ${shortPath(r.value.dir)}`)
+      if (r.ok) return host.notify(savedNotice(r.value.dir, r.value.files))
       if (nav() === mine) host.info("Export failed", [r.detail])
       else host.notify(`Export failed: ${r.detail}`)
     }

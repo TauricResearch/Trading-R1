@@ -84,7 +84,9 @@ def main(argv: list[str]) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(data)
     except PdfTextError as err:
-        _err(f"[trading-r1] {err} (--format html)")
+        _err(
+            f"[trading-r1] {err}. For an HTML page: trading-r1 export {args.session} --format html"
+        )
         return 1
     except OSError as err:
         _err(f"[trading-r1] {output} could not be written: {err.strerror or err}")
