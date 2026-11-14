@@ -31,8 +31,8 @@ class Article(BaseModel):
     run), time and its basis (published, or first seen by Tauric), publisher and the
     publishers of syndicated copies (or their count), headline, Tauric's read, link and summary."""
 
-    source: Number = None  # what claims cite it by: the run's [N], or its Tauric id
-    id: Annotated[int | None, hint(hidden=True)] = None
+    source: float | int | str | None = None  # what claims cite it by: the run's [N], or its Tauric id
+    id: Annotated[str | None, hint(hidden=True)] = None
     published: Day = None
     time_basis: Code = None
     publisher: Code = None
@@ -189,10 +189,10 @@ def renumber(text: str, numbers: dict[int, int], cited: set[int]) -> str:
         return text
 
     def swap(m: re.Match[str]) -> str:
-        ids = [int(x) for x in m.group(1).split(",")]
+        ids = [t.strip() for t in m.group(1).split(",")]
         if not any(i in cited for i in ids):
             return m.group(0)
-        ns = sorted({numbers[i] for i in ids if i in numbers})
+        ns = sorted({numbers[i] for i in ids if i in numbers}, key=str)
         return f"[{', '.join(map(str, ns))}]" if ns else ""
 
     return _ID_RUN.sub(swap, text)

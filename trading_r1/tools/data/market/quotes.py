@@ -69,11 +69,20 @@ class MarketQuotesOutput(Output):
 def _quote(q: dict[str, Any]) -> Quote:
     day = q.get("day") or {}
     span = q.get("range_52w") or {}
+    change = q.get("change")
+    # the change is a scalar in the older shape, `{absolute, percent}` in the current one
+    if isinstance(change, dict):
+        change, change_pct = change.get("absolute"), change.get("percent")
+    else:
+        change_pct = q.get("change_percent")
+    previous = q.get("previous_close")
+    if isinstance(previous, dict):
+        previous = previous.get("value")
     return Quote(
         price=q.get("price"),
-        change=q.get("change"),
-        change_pct=q.get("change_percent"),
-        previous_close=(q.get("previous_close") or {}).get("value"),
+        change=change,
+        change_pct=change_pct,
+        previous_close=previous,
         day_high=day.get("high"),
         day_low=day.get("low"),
         volume=day.get("volume"),
@@ -81,9 +90,22 @@ def _quote(q: dict[str, Any]) -> Quote:
         low_52w=span.get("low"),
         currency=(q.get("instrument") or {}).get("currency"),
         market_state=q.get("market_state"),
-        as_of=q.get("source_time"),
+        as_of=q.get("price_time") or q.get("source_time"),
         session_date=q.get("session_date"),
     )
+
+
+def _quote_nodes(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The quotes an answer carries, keyed by the instrument's Tauric key: the current shape is
+    a `data` list of quote nodes, the older one a `quotes` map with an `errors` map beside it."""
+    if isinstance(body.get("quotes"), dict):
+        return body["quotes"]
+    out: dict[str, dict[str, Any]] = {}
+    for node in body.get("data") or []:
+        key = (node.get("instrument") or {}).get("key") or node.get("key")
+        if key:
+            out[key] = node
+    return out
 
 
 async def _handler(req: MarketQuotesRequest) -> Result:
@@ -106,7 +128,7 @@ async def _handler(req: MarketQuotesRequest) -> Result:
         raise ToolError("no symbol could be quoted: " + "; ".join(left_out.values()))
     async with Tauric() as api:
         body = await api.post("/quotes", {"instruments": list(asked)})
-    data, errors = body.get("quotes") or {}, body.get("errors") or {}
+    data, errors = _quote_nodes(body), body.get("errors") or {}
     quotes: dict[str, Quote] = {}
     for key, spellings in asked.items():
         if key in data and data[key].get("price") is not None:

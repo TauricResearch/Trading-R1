@@ -436,16 +436,21 @@ async def _intraday_pages(
     api: Tauric, inst: Instrument, interval: str, sessions: int, end: str | None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Intraday bars for the `sessions` up to `end`, paged backwards through
-    `coverage.continue_end`. Oldest first."""
+    `coverage.continue_end`. Oldest first.
+
+    The route takes a `start`/`end` window, so a session count is widened to calendar days
+    (a listed security trades about 5 of 7 days; `fetch_bars` trims to the exact sessions
+    afterwards). Bars are read from the current `data` container or the older `bars`."""
     page = INTRADAY[interval].page_sessions
+    last = end or dt.date.today().isoformat()
+    back = int(math.ceil(sessions * 7 / 5)) + 4
+    start = (dt.date.fromisoformat(last) - dt.timedelta(days=back)).isoformat()
     first: dict[str, Any] = {}
     raw: list[dict[str, Any]] = []
     for served in range(0, sessions, page):
-        body = await api.get(
-            f"{inst.path}/history", interval=interval, days=min(page, sessions - served), end=end
-        )
+        body = await api.get(f"{inst.path}/history", interval=interval, start=start, end=end)
         first = first or body
-        raw = (body.get("bars") or []) + raw
+        raw = _bars_of(body) + raw
         end = (body.get("coverage") or {}).get("continue_end")
         if not end:
             break
@@ -461,28 +466,43 @@ async def _daily_pages(
     end: str | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Daily bars for a window up to `end`, paged backwards through `coverage.continue_end` until
-    the window's start (or its session count) is covered or the history ends. Oldest first."""
+    the window's start (or its session count) is covered or the history ends. Oldest first.
+
+    The history route takes a concrete `start`/`end` window (at most 366 days a call) and pages
+    back by `end`; a `period` preset is turned into dates here. A window counted in sessions is
+    widened to calendar days (sessions ≈ 5 of 7 days for exchange assets, every day for the
+    round-the-clock classes); `fetch_bars` trims the last `sessions` sessions afterwards, so
+    over-serving is safe."""
+    last = end or dt.date.today().isoformat()
+    if start is None and sessions is not None:
+        back = int(math.ceil(sessions * 7 / 5)) + 4
+        start = (dt.date.fromisoformat(last) - dt.timedelta(days=back)).isoformat()
     bars: dict[str, dict[str, Any]] = {}
     first: dict[str, Any] = {}
     for _ in range(_MAX_PAGES):
         body = await api.get(
             f"{inst.path}/history",
-            period=_first_period(inst.kind, days) if not first else _PAGE[inst.kind],
+            start=start if not first else None,
             end=end,
         )
         first = first or body
-        for b in body.get("bars") or []:
+        for b in _bars_of(body):
             bars.setdefault(b["date"], b)
         end = (body.get("coverage") or {}).get("continue_end")
         usable = sum(
             _row(b, fx=inst.kind == "fx", intraday=False) is not None for b in bars.values()
         )
         # `continue_end` is the day before the page's first date: a start on or after it is covered
-        if not end or not body.get("bars") or (start is not None and end < start):
+        if not end or not _bars_of(body) or (start is not None and end < start):
             break
         if sessions is not None and usable >= sessions:
             break
     return first, [bars[d] for d in sorted(bars)]
+
+
+def _bars_of(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """The bars a history answer carries: the current `data`, or the older `bars` shape."""
+    return body.get("data") or body.get("bars") or []
 
 
 def annualization(
