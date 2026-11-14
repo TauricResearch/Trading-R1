@@ -72,8 +72,8 @@ def _story(raw: dict) -> dict | None:
 
 async def _handler(req: NewsRequest) -> Result:
     window = {
-        "since": req.start and f"{req.start.isoformat()}T00:00:00Z",
-        "until": req.end and f"{req.end.isoformat()}T23:59:59.999999Z",
+        "start": req.start and f"{req.start.isoformat()}T00:00:00Z",
+        "end": req.end and f"{req.end.isoformat()}T23:59:59.999999Z",
         "sentiment": req.sentiment,
         "instrument": req.symbol and f"security:{req.symbol}",
         "limit": NEWS_PAGE,
