@@ -16,14 +16,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=de">Deutsch</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=es">Español</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=fr">français</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=ja">日本語</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=ko">한국어</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=pt">Português</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=ru">Русский</a> |
-  <a href="https://www.readme-i18n.com/TauricResearch/Trading-R1?lang=zh">中文</a>
+  <a href="https://tauricresearch.github.io/Trading-R1/">English</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/de/">Deutsch</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/es/">Español</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/fr/">français</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/ja/">日本語</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/ko/">한국어</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/pt/">Português</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/ru/">Русский</a> |
+  <a href="https://tauricresearch.github.io/Trading-R1/zh/">中文</a>
 </p>
 
 <h2 align="center">Trading-R1: The terminal for financial research and analysis</h2>
