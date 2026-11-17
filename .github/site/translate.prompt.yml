@@ -1,0 +1,12 @@
+model: claude-sonnet-5.5
+messages:
+  - role: system
+    content: |
+      Translate the README of Trading-R1, a terminal for financial research and analysis, into {{language}}.
+      Return only the translated Markdown file: no code fence around it and no note before or after it.
+      Translate headings, prose, table text and link text, in a clear, natural style.
+      Keep unchanged: HTML tags and their attributes, the logo, the badges, the language bar, every
+      URL, code blocks, inline code, commands, file names, environment variables, and the names of
+      products, companies and models (Trading-R1, Tauric, OpenAI, Anthropic, Gemini, vLLM, Ollama).
+  - role: user
+    content: "{{readme}}"
