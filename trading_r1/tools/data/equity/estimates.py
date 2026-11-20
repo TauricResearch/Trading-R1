@@ -13,7 +13,6 @@ expectations, not facts, and no rating label is derived from them.
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -28,9 +27,8 @@ _DESCRIPTION = (
     "Analyst consensus for a public equity: price targets (mean/median/high/low, with the "
     "implied move from the current price), the rating spread (strong buy, buy, hold, sell, "
     "strong sell) with the number of ratings and the vendor's recommendation label, trailing "
-    "and forward EPS (and the growth between them), the number of analysts, and the report on "
-    "the calendar: its date, whether it is `upcoming` or already past, and its consensus EPS and "
-    "revenue estimate. Prices and EPS are in "
+    "and forward EPS (and the growth between them), the number of analysts, and the next report "
+    "on the calendar: its date and its consensus EPS and revenue estimate. Prices and EPS are in "
     "`currency`, the listing's; the revenue estimate is in the reporting currency. "
     "Forward-looking sell-side estimates: present them as consensus expectations. "
     "The earnings record is data.equity.earnings."
@@ -77,10 +75,9 @@ class Eps(BaseModel):
 
 
 class NextReport(BaseModel):
-    """The report on the calendar: next (`upcoming`), or the latest until the next is set."""
+    """The next report on the calendar."""
 
     date: Day = None
-    upcoming: bool | None = None
     eps_estimate: Price = None
     revenue_estimate: Money = None  # in the reporting currency
 
@@ -106,8 +103,6 @@ def _consensus(a: dict[str, Any], price: float | None, calendar: dict[str, Any])
     eps = {"trailing": trailing, "forward": forward}
     if trailing and forward is not None:
         eps["forward_growth"] = (forward - trailing) / abs(trailing)
-    earnings = calendar.get("earnings") or {}
-    day = earnings.get("earnings_date")
     return {
         "price_targets": {k: v for k, v in targets.items() if v is not None},
         "ratings": {
@@ -121,26 +116,17 @@ def _consensus(a: dict[str, Any], price: float | None, calendar: dict[str, Any])
         },
         "num_analysts": a.get("number_of_analysts"),
         "eps": {k: v for k, v in eps.items() if v is not None},
-        "next_report": {
-            k: v
-            for k, v in (
-                ("date", day),
-                ("upcoming", day >= dt.date.today().isoformat() if day else None),
-                ("eps_estimate", earnings.get("eps_estimate")),
-                ("revenue_estimate", earnings.get("revenue_estimate")),
-            )
-            if v is not None
-        },
+        "next_report": snapshot.next_report(calendar),
     }
 
 
 async def _handler(req: EquityEstimatesRequest) -> Result:
     ticker = req.symbol
     async with Tauric() as api:
-        analyst, quote, calendar = await asyncio.gather(
+        analyst, quote, (calendar, calendar_failure) = await asyncio.gather(
             snapshot.analyst(api, ticker),
             api.get(f"/securities/{ticker}/quote"),
-            api.get(f"/securities/{ticker}/calendar"),
+            snapshot.calendar(api, ticker),
         )
     if analyst is None:
         raise ToolError(
@@ -149,7 +135,12 @@ async def _handler(req: EquityEstimatesRequest) -> Result:
     d = _consensus(analyst, quote.get("price"), calendar)
     currency = (analyst.get("instrument") or {}).get("currency")
     return Result(
-        EstimatesOutput(ticker=ticker, currency=currency, **d, notes=api.limits),
+        EstimatesOutput(
+            ticker=ticker,
+            currency=currency,
+            **d,
+            notes=([calendar_failure] if calendar_failure else []) + api.limits,
+        ),
         Provenance(**provenance(subject=ticker)),
     )
 

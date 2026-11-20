@@ -267,7 +267,7 @@ _YEAR_DAYS = range(350, 380)
 _IDENTITY_TOLERANCE = 0.01
 
 Fact = dict[str, Any]
-Facts = dict[str, dict[str, Any]]  # concept to Tauric's entry (unit, last_period_end, values)
+Facts = dict[str, dict[str, Any]]  # concept to Tauric's entry (label, last_period_end, values)
 Series = list[float | None]
 Column = dict[str, float]  # concept to its value in one period
 
@@ -322,7 +322,7 @@ async def fetch_facts(
             for g in groups
         )
     )
-    return {k: v for body in bodies for k, v in (body.get("concepts") or {}).items()}
+    return {e["key"]: e for body in bodies for e in body.get("data") or []}
 
 
 def limits_for(statement: str, quarterly: bool, periods: int) -> dict[str, int]:
@@ -359,9 +359,9 @@ async def load_facts(
 
 
 def currency(facts: Facts) -> str | None:
-    """The reporting currency: the unit of any monetary concept."""
-    units = (e.get("unit") or "" for e in facts.values())
-    return next((u for u in units if u and "/" not in u and u != "shares"), None)
+    """The reporting currency: the currency of any monetary value's unit."""
+    units = (v.get("unit") or {} for e in facts.values() for v in e.get("values") or [])
+    return next((u["currency"] for u in units if u.get("currency")), None)
 
 
 # --------------------------------------------------------------------------- #
@@ -371,6 +371,15 @@ def currency(facts: Facts) -> str | None:
 
 def _days(a: str, b: str) -> int:
     return (dt.date.fromisoformat(a) - dt.date.fromisoformat(b)).days
+
+
+def _end(v: Fact) -> str:
+    return v["period"]["end"]
+
+
+def _start(v: Fact) -> str | None:
+    """The period's first day; None for a balance-sheet date."""
+    return v["period"]["start"]
 
 
 def _values(facts: Facts, concept: str) -> list[Fact]:
@@ -385,7 +394,7 @@ def _years(facts: dict[str, Facts], concept: str) -> list[Fact]:
 def _by_end(values: list[Fact]) -> dict[str, float]:
     out: dict[str, float] = {}
     for v in values:  # a restated period appears twice: the first listed wins, as in ttm
-        out.setdefault(v["period_end"], v["value"])
+        out.setdefault(_end(v), v["value"])
     return out
 
 
@@ -394,14 +403,14 @@ def _discrete_quarters(facts: list[Fact]) -> dict[str, float]:
     fiscal year (same start), each cumulative less the one a quarter before it."""
     by_start: dict[str, list[Fact]] = {}
     for f in facts:
-        if f.get("period_start"):
-            by_start.setdefault(f["period_start"], []).append(f)
+        if _start(f):
+            by_start.setdefault(_start(f), []).append(f)
     out: dict[str, float] = {}
     for group in by_start.values():
-        group.sort(key=lambda f: f["period_end"])
+        group.sort(key=_end)
         for prev, cur in zip(group, group[1:], strict=False):
-            if _days(cur["period_end"], prev["period_end"]) in _QUARTER_GAP:
-                out[cur["period_end"]] = cur["value"] - prev["value"]
+            if _days(_end(cur), _end(prev)) in _QUARTER_GAP:
+                out[_end(cur)] = cur["value"] - prev["value"]
     return out
 
 
@@ -428,7 +437,7 @@ def _first_per_window(values: list[Fact]) -> list[Fact]:
     """One fact per (start, end) window: the first listed, i.e. the preferred concept's."""
     seen: dict[tuple[Any, str], Fact] = {}
     for v in values:
-        seen.setdefault((v.get("period_start"), v["period_end"]), v)
+        seen.setdefault((_start(v), _end(v)), v)
     return list(seen.values())
 
 
@@ -446,25 +455,23 @@ def ttm(facts: dict[str, Facts], *concepts: str) -> tuple[str, float] | None:
     )
     if not cumulative and not annual:
         return None
-    latest = max([v["period_end"] for v in cumulative] + [a["period_end"] for a in annual])
-    year = next((a for a in annual if a["period_end"] == latest), None)
+    latest = max(_end(v) for v in cumulative + annual)
+    year = next((a for a in annual if _end(a) == latest), None)
     if year is not None:
         return latest, year["value"]
     # the longest cumulative ending at the latest date runs from the fiscal year's start
-    current = max(
-        (v for v in cumulative if v["period_end"] == latest), key=lambda v: v["duration_days"]
-    )
+    current = max((v for v in cumulative if _end(v) == latest), key=lambda v: v["duration_days"])
     prior = next(
         (
             v
             for v in cumulative
-            if _days(latest, v["period_end"]) in _YEAR_DAYS
+            if _days(latest, _end(v)) in _YEAR_DAYS
             and abs(v["duration_days"] - current["duration_days"]) <= 10
         ),
         None,
     )
     last_year = next(
-        (a for a in annual if _days(current["period_start"], a["period_end"]) in range(0, 15)),
+        (a for a in annual if _days(_start(current), _end(a)) in range(0, 15)),
         None,
     )
     if prior is None or last_year is None:

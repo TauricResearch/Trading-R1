@@ -75,19 +75,19 @@ def dividend_sums(
 
 
 def disputed(rows: list[dict[str, Any]], since: dt.date) -> set[tuple[str, str]]:
-    """The (ex-date, action type) pairs reports disagree on: Tauric returns every report's value."""
-    return {
-        (r["ex_date"], r["action_type"])
-        for r in rows
-        if r["ex_date"] >= since.isoformat()
-        and (r.get("field_states") or {}).get("assertion", {}).get("reason")
-        == "conflicting_assertions"
-    }
+    """The (ex-date, action type) pairs reported with different values: Tauric returns each. A
+    row without a value disputes nothing."""
+    values: dict[tuple[str, str], set[float]] = {}
+    for r in rows:
+        if r["ex_date"] >= since.isoformat() and r.get("value") is not None:
+            values.setdefault((r["ex_date"], r["action_type"]), set()).add(r.get("value"))
+    return {k for k, v in values.items() if len(v) > 1}
 
 
 def _curate(body: dict[str, Any], since: dt.date) -> dict[str, Any]:
     rows = body.get("data") or []
-    currency = next((r["currency"] for r in rows if r.get("currency")), None)
+    units = (r.get("unit") or {} for r in rows)
+    currency = next((u["currency"] for u in units if u.get("currency")), None)
     out = {
         "currency": currency or (body.get("instrument") or {}).get("currency"),
         "dividends": _events(rows, "dividend", since, "amount"),
