@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
+from trading_r1 import USER_AGENT
 from trading_r1.providers.profiles import ModelProfile
 
 # on_delta(kind, text) with kind in {"reasoning", "content"}: the streaming seam.
@@ -152,7 +153,9 @@ class Provider(ABC):
         from trading_r1.providers.client import client_for
 
         key = self.profile.resolve_api_key()
-        headers = {"Authorization": f"Bearer {key}"} if key and key != "EMPTY" else {}
+        headers = {"User-Agent": USER_AGENT}
+        if key and key != "EMPTY":
+            headers["Authorization"] = f"Bearer {key}"
         return str(client_for(self.profile).base_url).rstrip("/") + "/models", headers
 
     def is_overflow(self, message: str) -> bool:

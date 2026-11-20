@@ -16,6 +16,8 @@ from typing import Any
 
 import httpx
 
+from trading_r1 import USER_AGENT
+
 DEFAULT_BASE_URL = "https://api.tauric.ai/v1"
 REQUEST_S = 30.0
 APPLICATION = "tauric"
@@ -181,7 +183,7 @@ class ArchiveClient:
         self.application = application
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/") + "/",
-            headers={"Authorization": f"Bearer {key}"},
+            headers={"Authorization": f"Bearer {key}", "User-Agent": USER_AGENT},
             timeout=timeout,
             transport=transport,
         )

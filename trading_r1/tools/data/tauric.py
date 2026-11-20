@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+from trading_r1 import USER_AGENT
 from trading_r1.contract.spec import ToolError
 from trading_r1.runtime.retry import RETRYABLE_STATUS, is_transient_http, with_retry
 from trading_r1.state.runtime_config import runtime_config
@@ -243,7 +244,9 @@ class Tauric:
         data = runtime_config().data
         timeout = httpx.Timeout(data.read_timeout_s, connect=data.connect_timeout_s)
         self._client = httpx.AsyncClient(
-            base_url=self._base, timeout=timeout, headers={"Authorization": f"Bearer {self._key}"}
+            base_url=self._base,
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {self._key}", "User-Agent": USER_AGENT},
         )
         return self
 
