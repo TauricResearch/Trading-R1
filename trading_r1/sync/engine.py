@@ -33,13 +33,13 @@ from trading_r1.sync.client import (
     MAX_APPEND,
     ArchiveClient,
     ArchiveError,
-    ArchiveFullError,
     DeletedError,
     DivergedError,
     NotAuthorisedError,
     OffsetMismatchError,
     RateLimitedError,
     RejectedError,
+    StorageFullError,
     TooLargeError,
     TransientError,
     UnreadableAnswerError,
@@ -149,7 +149,7 @@ class SyncEngine:
         }
 
     async def usage(self) -> dict[str, int]:
-        """``{used_bytes, allowance_bytes}`` of the account's archive."""
+        """``{used_bytes, allowance_bytes}`` of the account's storage."""
         return await self.client.usage()
 
     # -- push -----------------------------------------------------------------------------
@@ -221,7 +221,7 @@ class SyncEngine:
                     ) from None
                 self.store.update(session_id, cursor=err.size, remote_size=err.size)
                 continue
-            except ArchiveFullError as err:
+            except StorageFullError as err:
                 if 0 < err.remaining < len(batch):
                     limit, strict, reduced_by = err.remaining, True, "full"
                     continue
@@ -402,7 +402,7 @@ class SyncEngine:
         except ArchiveError:
             return
         for view in listed:
-            entry = self.store.get(view["session_id"])
+            entry = self.store.get(view["id"])
             if entry is None:
                 continue
             if entry.tombstone:

@@ -30,9 +30,9 @@ _NOT_AUTHORISED = {
     "invalid_api_key",
     "api_key_inactive",
     "api_key_expired",
-    "insufficient_scope",
+    "account_inactive",
+    "entitlement_required",
     "principal_not_permitted",
-    "forbidden",
 }
 
 
@@ -68,8 +68,8 @@ class DivergedError(_SizedError):
     """The archive holds different bytes at the offset: another writer continued the session."""
 
 
-class ArchiveFullError(ArchiveError):
-    """The account's allowance cannot hold the append; ``remaining`` bytes would still fit."""
+class StorageFullError(ArchiveError):
+    """The account's storage cannot hold the append; ``remaining`` bytes would still fit."""
 
     def __init__(self, message: str, *, remaining: int, **kw: Any) -> None:
         super().__init__(message, **kw)
@@ -126,8 +126,8 @@ def _error_for(response: httpx.Response, scrub: Callable[[str], str]) -> Archive
         return DivergedError(text, size=int(body.get("size", 0)), **kw)
     if code == "session_offset_mismatch":
         return OffsetMismatchError(text, size=int(body.get("size", 0)), **kw)
-    if code == "archive_full":
-        return ArchiveFullError(text, remaining=int(body.get("remaining_bytes", 0)), **kw)
+    if code == "storage_full":
+        return StorageFullError(text, remaining=int(body.get("remaining_bytes", 0)), **kw)
     if code == "session_deleted":
         return DeletedError(text, **kw)
     if code == "request_too_large":
@@ -136,7 +136,7 @@ def _error_for(response: httpx.Response, scrub: Callable[[str], str]) -> Archive
         return RateLimitedError(text, retry_after=_retry_after(response), **kw)
     if code == "not_found":
         return NotFoundError(text, **kw)
-    if status >= 500 or code in ("server_error", "service_unavailable"):
+    if status >= 500 or code in ("server_error", "temporarily_unavailable"):
         return TransientError(text, **kw)
     return RejectedError(text, **kw)
 
@@ -209,12 +209,9 @@ class ArchiveClient:
     # -- calls ----------------------------------------------------------------------------
     @_read
     async def usage(self) -> dict[str, int]:
-        """``{used_bytes, allowance_bytes}`` of the account's archive."""
+        """``{used_bytes, allowance_bytes}`` of the account's storage."""
         storage = (await self._call("GET", "account/usage")).json()["account"]["storage"]
-        return {
-            "used_bytes": storage["archive_bytes"],
-            "allowance_bytes": storage["archive_allowance_bytes"],
-        }
+        return {"used_bytes": storage["used_bytes"], "allowance_bytes": storage["allowance_bytes"]}
 
     @_read
     async def list_sessions(
@@ -224,9 +221,7 @@ class ArchiveClient:
         params: dict[str, Any] = {"limit": limit} | ({"after": after} if after else {})
         path = f"applications/{self.application}/sessions"
         body = (await self._call("GET", path, params=params)).json()
-        return [_view(v) | {"session_id": str(v["session_id"])} for v in body["data"]], body.get(
-            "next_cursor"
-        )
+        return [_view(v) | {"id": str(v["id"])} for v in body["data"]], body["next_cursor"]
 
     @_read
     async def put_session(
@@ -257,7 +252,7 @@ class ArchiveClient:
     @_read
     async def append(self, session_id: str, offset: int, body: bytes) -> tuple[int, int]:
         """Append whole lines at ``offset``. Returns ``(size, verified_to)``."""
-        headers = {"Upload-Offset": str(offset), "Content-Type": "application/jsonl"}
+        headers = {"Upload-Offset": str(offset), "Content-Type": "application/octet-stream"}
         content = body
         if len(body) > GZIP_ABOVE:
             packed = gzip.compress(body, mtime=0)

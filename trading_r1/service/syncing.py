@@ -193,7 +193,8 @@ class SyncRuntime:
         }
 
     async def usage(self) -> dict[str, int] | None:
-        """``{used_bytes, allowance_bytes}`` when the archive answers, else None."""
+        """``{used_bytes, allowance_bytes}`` of the account's storage when it answers, else
+        None."""
         engine = self.engine()
         if engine is None or not self.on():
             return None
