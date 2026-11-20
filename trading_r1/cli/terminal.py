@@ -112,8 +112,9 @@ def _tui(
     already running) + the TUI in the foreground, tearing the backend down on exit.
 
     A running backend (the daemon, or another terminal's) is attached to through the address it
-    published; if none runs, this process serves one on a thread, holding the backend lock, and
-    stops it on exit. The TUI is a Bun child that owns the terminal and gets the address and token.
+    published, and refused when its version differs from this one; if none runs, this process
+    serves one on a thread, holding the backend lock, and stops it on exit. The TUI is a Bun
+    child that owns the terminal and gets the address and token.
 
     ``--profile`` and ``--mode`` are honored by handing them to the TUI subprocess as
     ``TR1_PROFILE`` / ``TR1_MODE``: the TUI then sends that profile on every ``/research`` and
@@ -132,7 +133,6 @@ def _tui(
         if backend is not None:
             backend.stop()
 
-    mismatch = ""
     if api_url is None:
         from trading_r1 import __version__
 
@@ -141,13 +141,15 @@ def _tui(
         except host.ServiceUnreachableError as err:
             _err(f"[trading-r1] {err}")
             return 1
+        if running is not None and running.version != __version__:
+            _err(
+                f"[trading-r1] a backend of version {running.version} is running, this is "
+                f"{__version__}: close the other trading-r1 terminal, or run `trading-r1 daemon "
+                "install` if it is the service"
+            )
+            return 1
         if running is not None:
             api_url, token = running.url, running.token
-            if running.version != __version__:
-                mismatch = (
-                    f"The running backend is version {running.version}, this is {__version__}: "
-                    "restart it (trading-r1 daemon restart)"
-                )
         else:
             port = _free_port(_LOOPBACK[0], host.default_port())
             _err("[trading-r1] starting backend…")
@@ -176,8 +178,6 @@ def _tui(
         return 1
 
     env = {**os.environ, "TR1_API_URL": api_url, host.TOKEN_ENV: token}
-    if mismatch:
-        env["TR1_LAUNCH_NOTICE"] = mismatch
     if initial_prompt:
         env["TR1_INITIAL_PROMPT"] = initial_prompt
     if profile:

@@ -141,9 +141,6 @@ function AppInner() {
     setTurns((ts) => (ts.length ? [...ts.slice(0, -1), fn(ts[ts.length - 1])] : ts))
 
   onMount(() => void bootstrap())
-  onMount(() => {
-    if (launchEnv.TR1_LAUNCH_NOTICE) notify(launchEnv.TR1_LAUNCH_NOTICE)
-  })
   // A backbone that did not answer its readiness probe (the endpoint was still starting, a
   // blip) is probed again until it does, so the header does not stay offline for good.
   onMount(() => {
