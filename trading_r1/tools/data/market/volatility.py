@@ -64,7 +64,7 @@ def _point(q: dict[str, Any]) -> dict[str, Any]:
     five = q.get("change_5d") or {}
     return {
         "level": q.get("price"),
-        "change": q.get("change"),
+        "change": (q.get("change") or {}).get("absolute"),
         "change_5d": five.get("absolute"),
         "change_5d_from": (five.get("from_period") or {}).get("label"),
     }
@@ -72,7 +72,7 @@ def _point(q: dict[str, Any]) -> dict[str, Any]:
 
 async def _handler(_req: VolTermStructureRequest) -> Result:
     async with Tauric() as api:
-        body = await api.get("/series/vix-term-structure")
+        body = await api.get("/markets/equity/volatility-term-structure")
     curve = [
         Point(index=label, days=days, **_point(body[field]))
         for field, (label, days) in _TENORS.items()
