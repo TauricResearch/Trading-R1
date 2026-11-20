@@ -16,7 +16,7 @@ from typing import Any
 
 from trading_r1.contract.spec import ToolError
 from trading_r1.tools.data.equity import statements
-from trading_r1.tools.data.tauric import Tauric
+from trading_r1.tools.data.tauric import NOT_PUBLISHED, Tauric
 
 # the flows each tool's TTM figures are built from
 INCOME_LINES = (
@@ -45,7 +45,7 @@ async def analyst(api: Tauric, ticker: str) -> dict[str, Any] | None:
     try:
         return await api.get(f"/securities/{ticker}/analyst")
     except ToolError as err:
-        if err.code == "not_published":
+        if err.code in NOT_PUBLISHED:
             return None
         raise
 
