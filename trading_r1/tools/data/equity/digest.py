@@ -64,10 +64,7 @@ class DigestOutput(Output):
     """One day's digest (headline, bullets, watch items) or the thesis (narrative, drivers,
     risks, catalysts, open questions); each claim ends with its sources' numbers."""
 
-    model_config = rendered(
-        then="Machine-generated from the articles Tauric collects: verify a claim through its "
-        "sources, and open them with `visit`."
-    )
+    model_config = rendered(then=articles.VERIFY)
 
     ticker: Code
     view: Code
@@ -86,18 +83,15 @@ class DigestOutput(Output):
     sources: list[Cited]
 
 
-def _claims(content: dict[str, Any], numbers: dict[int, int], cited: set[int]) -> dict:
+def _claims(content: dict[str, Any], numbers: dict[str, int | str]) -> dict:
     """The view's claims, each text ending with its sources' numbers: the run's [N] for the
     resolved articles inside a run, Tauric's ids outside one."""
 
     def text(x: dict[str, Any]) -> str:
-        ids = x.get("article_ids") or []
-        ns = [numbers[i] for i in ids if i in numbers] if numbers else ids
-        body = articles.renumber(x.get("text") or "", numbers, cited)
-        return f"{body} [{', '.join(map(str, ns))}]" if ns else body
+        return articles.claim(x.get("text"), x.get("article_ids") or [], numbers)
 
     def prose(x: str | None) -> str | None:
-        return articles.renumber(x, numbers, cited) if x else x
+        return articles.renumber(x, numbers) if x else x
 
     return {
         "headline": prose(content.get("headline")),
@@ -111,8 +105,8 @@ def _claims(content: dict[str, Any], numbers: dict[int, int], cited: set[int]) -
         "risks": [text(x) for x in content.get("risks") or []],
         "catalysts": [
             {
-                "date": c.get("date") or None,  # an undated catalyst's date is ""
-                "timing": None if c.get("date") else c.get("timing_verbatim"),
+                "date": c.get("date"),
+                "timing": None if c.get("date") else c.get("timing_stated"),
                 "timing_status": c.get("timing_status"),
                 "text": text(c),
             }
@@ -133,9 +127,7 @@ async def _handler(req: DigestRequest) -> Result:
         content = body.get("content") or {}
         if not content:
             raise ToolError(f"no {req.view} for '{ticker}'")
-        ids = articles.cited_ids(content)
-        sources = await articles.resolve(api, ids)
-    numbers = articles.number(sources)
+        ids, sources, numbers = await articles.sourced(api, content)
     cutoff = (body.get("evidence") or {}).get("cutoff")
     out = DigestOutput(
         ticker=ticker,
@@ -144,12 +136,8 @@ async def _handler(req: DigestRequest) -> Result:
         evidence_cutoff=cutoff,
         note=note,
         cited=len(ids),
-        sources=[
-            {k: a.get(k) for k in ("source", "id", "published", "time_basis", "publisher")}
-            | {"title": a.get("title"), "url": a["url"]}
-            for a in sources
-        ],
-        **_claims(content, numbers, set(ids)),
+        sources=sources,
+        **_claims(content, numbers),
     )
     return Result(
         out,
