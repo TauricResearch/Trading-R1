@@ -22,12 +22,13 @@ calendar.
 Windows: a preset (1d … 10y, ytd, max) or a lookback in weeks, months or years ("2w", "18mo",
 "3y"), converted to a start date so a request for three years gets three years, or in days
 ("10d"), the last N sessions. A window counts back from `end` when one is given, else from
-today; a `start` replaces the count. Tauric serves daily bars a year at a time (six months for
-indices, FX and crypto), so the engine pages back with `end`; weekly and monthly bars are
-resampled from daily. Intraday bars (15m, 60m) are served for listed securities, in windows up
-to 28 days, paged by the sessions one response carries. They annualize on the density the series
-itself shows: trading days × the median bars per complete session. With fewer than three sessions
-in the window the class's nominal session is used, ⌈session minutes ÷ bar minutes⌉.
+today; a `start` replaces the count. Daily bars are served a year per request up to `end`,
+paged back with `end` = `coverage.continue_end` until the window is covered or the history
+ends; weekly and monthly bars are resampled from daily. Intraday bars (15m, 1h) are served
+for listed securities, the newest 100 per request up to `end`, paged back with `end` =
+`coverage.continue_end`; a window spans at most 28 days. They annualize on the density the
+series itself shows: trading days × the median bars per complete session. With fewer than three
+sessions in the window the class's nominal session is used, ⌈session minutes ÷ bar minutes⌉.
 
 FX: Tauric withholds the daily close of a currency pair, so an FX bar's value is its open
 snapshot and the series is open-to-open.
@@ -56,33 +57,10 @@ PRESET_PERIODS = ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd
 _LOOKBACK = re.compile(r"^(\d{1,3})(d|w|mo|y)$")
 _MAX_LOOKBACK_YEARS = 50  # a unit-error rail, not a data limit
 _UNITS_PER_YEAR = {"d": 252, "w": 52, "mo": 12, "y": 1}  # "Nd" counts sessions
-_DAYS_PER_UNIT = {"d": 1, "w": 7, "mo": 31, "y": 366}
-# A calendar lookback starts at midnight, so it also spans the hours elapsed today.
-_START_OF_DAY_SLACK = 1
-_PRESET_DAYS = {
-    "1d": 1,
-    "5d": 5,
-    "1mo": 31,
-    "3mo": 92,
-    "6mo": 183,
-    "1y": 366,
-    "2y": 730,
-    "5y": 5 * 366,
-    "10y": 10 * 366,
-}
-# The longest daily window one response carries, by instrument kind, and the periods it serves.
-_PAGE = {"security": "1y", "future": "1y", "index": "6mo", "fx": "6mo", "crypto": "6mo"}
-_PAGE_PERIODS = (("1mo", 31), ("3mo", 92), ("6mo", 183), ("1y", 366))
-_MAX_PAGES = 15  # a backstop: fifteen years at a year a page
-
-
-@dataclass(frozen=True)
-class Intraday:
-    minutes: int  # per bar
-    page_sessions: int  # the most sessions one response carries
-
-
-INTRADAY = {"15m": Intraday(15, 7), "60m": Intraday(60, 28)}
+_PAGE_DAYS = 366  # the longest daily window one request with `start` may span
+_MAX_PAGES = _MAX_LOOKBACK_YEARS + 1  # a backstop on paging
+INTRADAY = {"15m": 15, "1h": 60}  # minutes per bar
+INTRADAY_LIMIT = 100  # the most intraday bars one request carries
 INTRADAY_MAX_DAYS = 28
 INTERVALS = (*INTRADAY, "1d", "1wk", "1mo")
 # Intraday density: sessions needed to measure bars per session (the first and last sessions of
@@ -90,10 +68,6 @@ INTERVALS = (*INTRADAY, "1d", "1wk", "1mo")
 _MIN_SESSIONS_FOR_DENSITY = 3
 _WEEKS_PER_YEAR = 52
 _MONTHS_PER_YEAR = 12
-# A history that begins more than this after the requested start is reported as shorter than
-# asked (a week absorbs weekends and holidays at the window's edge); likewise sessions for "Nd".
-_SHORT_HISTORY_SLACK_DAYS = 7
-_SHORT_HISTORY_SLACK_SESSIONS = 2
 
 
 @dataclass(frozen=True)
@@ -110,7 +84,7 @@ class AssetClass:
 
     def bars_per_session(self, interval: str) -> int:
         """Nominal intraday bars per full session: ⌈session ÷ bar⌉."""
-        return math.ceil(self.session_minutes / INTRADAY[interval].minutes)
+        return math.ceil(self.session_minutes / INTRADAY[interval])
 
     def bars_per_year(self, interval: str) -> float:
         if interval in INTRADAY:
@@ -170,8 +144,6 @@ class Bars:
     currency: str | None = None
     instrument_type: str | None = None
     adjusted: bool = False  # closes adjusted for splits and dividends (a total-return basis)
-    requested_start: str | None = None  # the start date a lookback asked for
-    requested_sessions: int | None = None  # N, for an "Nd" window
     requested_end: str | None = None  # the last date a window ending in the past asked for
     limits: tuple[str, ...] = ()  # what Tauric states limits these bars
 
@@ -190,19 +162,6 @@ def validate_period(v: str) -> str:
     return v
 
 
-def window_days(period: str, today: Any = None) -> float:
-    """The calendar days a window spans (an upper bound), N for "Nd", ``inf`` for max."""
-    if period == "max":
-        return math.inf
-    if period == "ytd":
-        return _day(today).timetuple().tm_yday
-    if period in _PRESET_DAYS:
-        return _PRESET_DAYS[period]
-    count, unit = _LOOKBACK.match(period).groups()
-    slack = 0 if unit == "d" else _START_OF_DAY_SLACK
-    return int(count) * _DAYS_PER_UNIT[unit] + slack
-
-
 class PriceWindow(BaseModel):
     """The window and bar size shared by every price tool."""
 
@@ -219,7 +178,7 @@ class PriceWindow(BaseModel):
     )
     interval: str = Field(
         "1d",
-        description="Bar interval: 1d (default), 1wk, 1mo, or intraday 15m and 60m, for listed "
+        description="Bar interval: 1d (default), 1wk, 1mo, or intraday 15m and 1h, for listed "
         f"securities only (not indices, FX, crypto or futures), in a window of at most "
         f"{INTRADAY_MAX_DAYS} days.",
     )
@@ -251,8 +210,12 @@ class PriceWindow(BaseModel):
 
 
 def _span(period: str, start: dt.date | None, end: dt.date | None) -> float:
-    """The calendar days a window spans: from `start` when it has one, else its period's."""
-    return (_day(end) - start).days + 1 if start else window_days(period, end)
+    """The calendar days a window spans: from `start` when it has one, else from its period's
+    first date; N for N sessions, ``inf`` for max."""
+    first = start.isoformat() if start else window_start(period, end)
+    if first is not None:
+        return (_day(end) - dt.date.fromisoformat(first)).days + 1
+    return window_sessions(period) or math.inf
 
 
 def _lookback(period: str) -> tuple[int | None, str | None]:
@@ -306,15 +269,6 @@ def window_sessions(period: str) -> int | None:
     return count if unit == "d" else None
 
 
-def _first_period(kind: str, days: float) -> str:
-    """The smallest period one response serves that covers `days`, within the kind's page."""
-    page = _PAGE[kind]
-    for name, span in _PAGE_PERIODS:
-        if span >= days or name == page:
-            return name
-    return page
-
-
 def _row(b: dict[str, Any], *, fx: bool, intraday: bool) -> dict[str, Any] | None:
     """A Tauric bar as an engine row, or None when it carries no usable value (a withheld
     close, a holiday). An FX bar's value is its open."""
@@ -332,6 +286,36 @@ def _row(b: dict[str, Any], *, fx: bool, intraday: bool) -> dict[str, Any] | Non
     return row
 
 
+def _usable(b: dict[str, Any], *, fx: bool) -> bool:
+    """Whether a bar carries a usable value, without reading it as the answer's (`Answer`)."""
+    value = dict.get(b, "open" if fx else "close")
+    return is_num(value) and value > 0
+
+
+def _window(
+    raw: list[dict[str, Any]],
+    first_day: str | None,
+    sessions: int | None,
+    *,
+    fx: bool,
+    intraday: bool,
+) -> list[dict[str, Any]]:
+    """The rows of the bars inside the window, from the newest back to `first_day` or to
+    `sessions` sessions; the bars before it are not read. Oldest first."""
+    rows: list[dict[str, Any]] = []
+    days: set[str] = set()
+    for b in reversed(raw):
+        day = dict.get(b, "date")[:10]
+        if first_day is not None and day < first_day:
+            break
+        if sessions is not None and day not in days and len(days) == sessions:
+            break
+        if (row := _row(b, fx=fx, intraday=intraday)) is not None:
+            rows.append(row)
+            days.add(day)
+    return rows[::-1]
+
+
 def utc_minute(start: str) -> str:
     """An intraday bar's start as an ISO instant to the minute, with its UTC offset."""
     return dt.datetime.fromisoformat(start).astimezone(dt.UTC).isoformat(timespec="minutes")
@@ -342,7 +326,6 @@ def resample(rows: list[dict[str, Any]], interval: str) -> list[dict[str, Any]]:
     group may be partial, as a live week or month is."""
     if interval == "1d":
         return rows
-    import datetime as dt
 
     def key(r: dict[str, Any]) -> tuple[int, int]:
         d = dt.date.fromisoformat(r["date"])
@@ -388,13 +371,12 @@ async def fetch_bars(
     first_day = start.isoformat() if start else window_start(period, end)
     sessions = None if start else window_sessions(period)
     last_day = end.isoformat() if end else None
-    span = _span(period, start, end)
     async with Tauric() as api:
         if intraday:
-            body, raw = await _intraday_pages(api, inst, interval, sessions or int(span), last_day)
+            body, raw = await _intraday_pages(api, inst, interval, first_day, sessions, last_day)
         else:
             try:
-                body, raw = await _daily_pages(api, inst, first_day, sessions, span, last_day)
+                body, raw = await _daily_pages(api, inst, first_day, sessions, last_day)
             except ToolError as err:
                 if inst.kind == "index" and err.code == "not_supported":
                     raise ToolError(
@@ -404,19 +386,20 @@ async def fetch_bars(
                     ) from err
                 raise
     instrument = body.get("instrument") or {}
-    rows = [r for b in raw if (r := _row(b, fx=fx, intraday=intraday)) is not None]
+    rows = _window(raw, first_day, sessions, fx=fx, intraday=intraday)
     if not rows:
-        raise ToolError(f"no price data for '{symbol}': check the symbol / period")
-    if sessions is not None:
-        days = sorted({r["date"][:10] for r in rows})[-sessions:]
-        rows = [r for r in rows if r["date"][:10] >= days[0]]
-    elif first_day is not None:
-        latest = rows[-1]["date"]
-        rows = [r for r in rows if r["date"] >= first_day]
-        if not rows:
-            raise ToolError(
-                f"no price data for '{symbol}' since {first_day}: its latest bar is {latest}"
-            )
+        usable = (_row(b, fx=fx, intraday=intraday) for b in reversed(raw))
+        latest = next((r["date"] for r in usable if r is not None), None)
+        if first_day is None or latest is None:
+            raise ToolError(f"no price data for '{symbol}': check the symbol / period")
+        raise ToolError(
+            f"no price data for '{symbol}' since {first_day}: its latest bar is {latest}"
+        )
+    limits = api.limits
+    if first_day is None and len({r["date"][:10] for r in rows}) >= (sessions or 0):
+        # a window without a start (max, N sessions) that was served whole ends where the
+        # history does: the oldest page reaching before it is not short of the window
+        limits = [n for n in limits if not n.endswith(": incomplete (insufficient_history).")]
     if not intraday:
         rows = resample(rows, interval)
     return Bars(
@@ -425,29 +408,36 @@ async def fetch_bars(
         currency=instrument.get("currency"),
         instrument_type=(instrument.get("classification") or {}).get("instrument_type"),
         adjusted=body.get("price_basis") == "split_dividend_adjusted",
-        requested_start=first_day,
-        requested_sessions=sessions,
         requested_end=last_day if end and end < dt.date.today() else None,
-        limits=tuple(api.limits),
+        limits=tuple(limits),
     )
 
 
 async def _intraday_pages(
-    api: Tauric, inst: Instrument, interval: str, sessions: int, end: str | None
+    api: Tauric,
+    inst: Instrument,
+    interval: str,
+    start: str | None,
+    sessions: int | None,
+    end: str | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Intraday bars for the `sessions` up to `end`, paged backwards through
-    `coverage.continue_end`. Oldest first."""
-    page = INTRADAY[interval].page_sessions
+    """Intraday bars up to `end`, paged back through `coverage.continue_end` until a session
+    before `start` (or more than `sessions` sessions) is reached, or the history ends. The
+    oldest session read can be partial; the caller trims it. Oldest first."""
     first: dict[str, Any] = {}
     raw: list[dict[str, Any]] = []
-    for served in range(0, sessions, page):
+    for _ in range(_MAX_PAGES):
         body = await api.get(
-            f"{inst.path}/history", interval=interval, days=min(page, sessions - served), end=end
+            f"{inst.path}/history", interval=interval, limit=INTRADAY_LIMIT, end=end
         )
         first = first or body
-        raw = (body.get("bars") or []) + raw
+        raw = (body.get("data") or []) + raw
         end = (body.get("coverage") or {}).get("continue_end")
-        if not end:
+        if not end or not raw:
+            break
+        if start is not None and raw[0]["date"] < start:
+            break
+        if sessions is not None and len({b["date"] for b in raw}) > sessions:
             break
     return first, raw
 
@@ -457,32 +447,27 @@ async def _daily_pages(
     inst: Instrument,
     start: str | None,
     sessions: int | None,
-    days: float,
     end: str | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Daily bars for a window up to `end`, paged backwards through `coverage.continue_end` until
-    the window's start (or its session count) is covered or the history ends. Oldest first."""
-    bars: dict[str, dict[str, Any]] = {}
+    """Daily bars up to `end`, a year per request, paged back through `coverage.continue_end`
+    until `start` (or `sessions` usable sessions) is reached, or the history ends. The request
+    whose year reaches `start` sends it, so that Tauric judges the window asked for. Oldest
+    first."""
     first: dict[str, Any] = {}
+    raw: list[dict[str, Any]] = []
     for _ in range(_MAX_PAGES):
-        body = await api.get(
-            f"{inst.path}/history",
-            period=_first_period(inst.kind, days) if not first else _PAGE[inst.kind],
-            end=end,
-        )
+        reach = _day(end[:10] if end else None) - dt.timedelta(days=_PAGE_DAYS - 1)
+        within = start if start is not None and start >= reach.isoformat() else None
+        body = await api.get(f"{inst.path}/history", start=within, end=end)
         first = first or body
-        for b in body.get("bars") or []:
-            bars.setdefault(b["date"], b)
+        raw = (body.get("data") or []) + raw
         end = (body.get("coverage") or {}).get("continue_end")
-        usable = sum(
-            _row(b, fx=inst.kind == "fx", intraday=False) is not None for b in bars.values()
-        )
-        # `continue_end` is the day before the page's first date: a start on or after it is covered
-        if not end or not body.get("bars") or (start is not None and end < start):
+        if not end or not raw or within or (start is not None and end < start):
             break
+        usable = sum(_usable(b, fx=inst.kind == "fx") for b in raw)
         if sessions is not None and usable >= sessions:
             break
-    return first, [bars[d] for d in sorted(bars)]
+    return first, raw
 
 
 def annualization(
@@ -581,11 +566,10 @@ def price_response(symbol: str, bars: Bars, interval: str, asset: AssetClass) ->
     intraday = interval in INTRADAY
     income = bars.adjusted and not intraday
     closes = [r["close"] for r in rows]
-    quoted = closes  # one price basis per instrument: levels and returns share it
     bars_per_year, per_session = annualization(asset, interval, [r["date"] for r in rows])
     per_bar, annualized = realized_vol(closes, bars_per_year)
-    hi = max(range(len(quoted)), key=quoted.__getitem__)
-    lo = min(range(len(quoted)), key=quoted.__getitem__)
+    hi = max(range(len(closes)), key=closes.__getitem__)
+    lo = min(range(len(closes)), key=closes.__getitem__)
     past = bars.requested_end is not None
     notes = [
         "Levels and returns use the quoted close."
@@ -602,7 +586,7 @@ def price_response(symbol: str, bars: Bars, interval: str, asset: AssetClass) ->
             f"The window ends {rows[-1]['date']}: `current` and `trailing` are as of that bar."
         )
     if bars.instrument and bars.instrument.note:
-        notes.append(bars.instrument.note + ".")
+        notes.append(bars.instrument.note)
     if asset.caveat:
         notes.append(asset.caveat)
     if bars.instrument_type == "rate":
@@ -610,14 +594,6 @@ def price_response(symbol: str, bars: Bars, interval: str, asset: AssetClass) ->
     if _still_forming(rows[-1]["date"], interval):
         notes.append(f"The last bar ({rows[-1]['date']}) is still forming.")
     notes.extend(bars.limits)
-    sessions = len({r["date"][:10] for r in rows})
-    wanted = bars.requested_sessions
-    if wanted is not None and sessions < wanted - _SHORT_HISTORY_SLACK_SESSIONS:
-        notes.append(f"Only {sessions} sessions returned of the {wanted} requested.")
-    if _starts_late(bars.requested_start, rows[0]["date"]):
-        notes.append(
-            f"History begins {rows[0]['date']}, after the requested start {bars.requested_start}."
-        )
     out = PriceOutput(
         ticker=symbol,
         key=bars.instrument.key if bars.instrument else None,
@@ -628,16 +604,16 @@ def price_response(symbol: str, bars: Bars, interval: str, asset: AssetClass) ->
         notes=notes,
         n_bars=len(rows),
         start_date=rows[0]["date"],
-        start=quoted[0],
-        current=quoted[-1],
+        start=closes[0],
+        current=closes[-1],
         period_return={("total" if income else "price"): closes[-1] / closes[0] - 1},
         trailing=[] if intraday else trailing_returns([r["date"] for r in rows], closes),
-        high=quoted[hi],
+        high=closes[hi],
         high_date=rows[hi]["date"],
-        low=quoted[lo],
+        low=closes[lo],
         low_date=rows[lo]["date"],
-        sma={str(w): sma_last(quoted, w) for w in (20, 50, 200)},
-        last_cross=last_cross(quoted),
+        sma={str(w): sma_last(closes, w) for w in (20, 50, 200)},
+        last_cross=last_cross(closes),
         realized_vol=RealizedVol(
             per_bar=per_bar, annualized=annualized, periods_per_year=bars_per_year
         ),
@@ -651,13 +627,6 @@ def price_response(symbol: str, bars: Bars, interval: str, asset: AssetClass) ->
         bars=rows,
     )
     return Result(out, Provenance(**provenance(subject=symbol, as_of=rows[-1]["date"])))
-
-
-def _starts_late(requested: str | None, first: str) -> bool:
-    if requested is None:
-        return False
-    first_day = dt.date.fromisoformat(first[:10])  # intraday stamps carry a time and an offset
-    return (first_day - dt.date.fromisoformat(requested)).days > _SHORT_HISTORY_SLACK_DAYS
 
 
 def session_density(stamps: list[str]) -> float | None:
@@ -678,5 +647,5 @@ def _still_forming(stamp: str, interval: str) -> bool:
     """True when an intraday bar's interval has not yet closed."""
     if interval not in INTRADAY:
         return False
-    end = dt.datetime.fromisoformat(stamp) + dt.timedelta(minutes=INTRADAY[interval].minutes)
+    end = dt.datetime.fromisoformat(stamp) + dt.timedelta(minutes=INTRADAY[interval])
     return end > dt.datetime.now(end.tzinfo)
