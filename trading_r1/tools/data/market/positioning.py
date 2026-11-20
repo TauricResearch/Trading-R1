@@ -38,7 +38,7 @@ _DESCRIPTION = (
     "report on or before a past date, with its window behind it. As of each Tuesday, published "
     "Friday."
 )
-_PAGE = 33  # Tauric's most reports per response
+_PAGE = 25  # Tauric's most reports per response
 _PERCENT = 100
 _CHANGE_WEEKS = (4, 13, 26)
 
@@ -57,12 +57,12 @@ async def _reports(
     api: Tauric, path: str, weeks: int, last: dt.date | None
 ) -> tuple[dict[str, Any], list[dict]]:
     """Reports up to `last`, oldest first, paged back through `coverage.continue_end`."""
-    body = await api.get(path, reports=min(weeks, _PAGE), end=last.isoformat() if last else None)
-    first, reports = body, list(body.get("reports") or [])
+    body = await api.get(path, limit=min(weeks, _PAGE), end=last.isoformat() if last else None)
+    first, reports = body, list(body.get("data") or [])
     end = (body.get("coverage") or {}).get("continue_end")
     while end and len(reports) < weeks:
-        body = await api.get(path, reports=min(weeks - len(reports), _PAGE), end=end)
-        page = body.get("reports") or []
+        body = await api.get(path, limit=min(weeks - len(reports), _PAGE), end=end)
+        page = body.get("data") or []
         if not page:
             break
         reports += page
@@ -88,15 +88,21 @@ def _weeks_back(dates: list[str]) -> dict[int, int]:
     return out
 
 
+def _positions(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """A report's positions by trader category."""
+    return {p["key"]: p for p in report.get("positions") or []}
+
+
 def groups(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Each trader group's latest position, its change in net over the change windows, and its net
     over the window (aligned with the reports' dates; None where a week lacks the group)."""
     latest = reports[-1]
     back = _weeks_back([r["period"]["end"] for r in reports])
     oi = latest.get("open_interest")
+    by_report = [_positions(r) for r in reports]
     out = {}
-    for name, pos in (latest.get("positions") or {}).items():
-        nets = [((r.get("positions") or {}).get(name) or {}).get("net") for r in reports]
+    for name, pos in by_report[-1].items():
+        nets = [(p.get(name) or {}).get("net") for p in by_report]
         net = pos.get("net")
         known = [n for n in nets if n is not None]
         prior = nets[-2] if len(nets) > 1 else None

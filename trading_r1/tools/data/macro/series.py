@@ -51,7 +51,7 @@ _DESCRIPTION = (
     "sheet, crude and crop balances). Find: give `query` (e.g. 'unemployment', 'core pce') or "
     "`category` to list matching series keys. Read: give `series` (a key such as "
     "us.cpi.core.sa) for its observations, oldest first: `limit` newest, or from `start` "
-    "(up to about 2,200 periods: decades of monthly data, eight years of daily), up to `end` "
+    "(up to about 2,000 periods: decades of monthly data, eight years of daily), up to `end` "
     "when given, with the newest value against the previous period and the year before; chain "
     "`values`, `dates`, "
     "`periods_per_year`. `projections` adds the forecasts published for periods not yet observed "
@@ -59,9 +59,9 @@ _DESCRIPTION = (
     "Index prices (S&P 500, VIX) are data.market.prices."
 )
 Category = Literal[CATEGORIES]  # type: ignore[valid-type]
-_PAGE = 110  # Tauric's most observations per response
-_LIST_MAX = 56  # Tauric's most series per list response
-_MAX_PAGES = 20  # a backstop: 2,200 periods (about eight years of a daily series)
+_PAGE = 100  # Tauric's most observations per response
+_LIST_MAX = 100  # Tauric's most series per list response
+_MAX_PAGES = 20  # a backstop: 2,000 periods (about eight years of a daily series)
 _MARKETING_YEAR = "marketing_year"  # Tauric's period kind for crop balances
 
 
@@ -152,8 +152,7 @@ class MacroSeriesOutput(Output):
     latest: Latest | None = None
     changes: Changes | None = None
     truncated: bool | None = None  # the read's page limit cut the window short
-    notes: list[Text] = []
-    missing: list[Code] = []  # periods not published inside the window
+    missing: list[Day] = []  # the ends of periods not published inside the window
     periods_per_year: Number = None
     dates: list[Day] = []
     periods: list[Code] = []
@@ -199,7 +198,7 @@ async def _observations(
     for _ in range(_MAX_PAGES):
         want = _PAGE if start else min(_PAGE, limit - len(obs))
         body = await api.get(f"/series/{key}/observations", limit=want, end=end, start=since)
-        page = body.get("observations") or []
+        page = body.get("data") or []
         obs = page + obs
         cov = body.get("coverage") or {}
         missing += cov.get("missing") or []
@@ -223,7 +222,7 @@ async def _year_ago(api: Tauric, key: str, last: dict[str, Any]) -> dict[str, An
         end=(near + slack).isoformat(),
         limit=_PAGE,
     )
-    return year_ago(last, body.get("observations") or [])
+    return year_ago(last, body.get("data") or [])
 
 
 async def _marketing_years(
@@ -233,7 +232,7 @@ async def _marketing_years(
     window is cut here. Returns the window's observations and those up to its end."""
     body = await api.get(f"/series/{key}/observations")
     last = req.end.isoformat() if req.end else None
-    upto = [o for o in body.get("observations") or [] if last is None or o["period"]["end"] <= last]
+    upto = [o for o in body.get("data") or [] if last is None or o["period"]["end"] <= last]
     if req.start:
         return [o for o in upto if o["period"]["start"] >= req.start.isoformat()], upto
     return upto[-req.limit :], upto
@@ -249,7 +248,7 @@ async def _projections(api: Tauric, key: str) -> tuple[list[Projection], list[st
             projection=p["value"],
             known_from=p.get("known_from"),
         )
-        for p in body.get("projections") or []
+        for p in body.get("data") or []
         if p.get("value") is not None
     ]
     return rows, [] if rows else [f"Tauric has no projection for {key}."]
@@ -294,13 +293,7 @@ async def _read(api: Tauric, req: MacroSeriesRequest) -> Result:
         ),
     }
     first, final = rows[0]["period"]["end"], last["period"]["end"]
-    gaps = sorted(
-        {
-            (m["period"]["end"], m["period"]["label"])
-            for m in missing
-            if m.get("period") and first <= m["period"]["end"] <= final
-        }
-    )
+    gaps = sorted({m["end"] for m in missing if first <= m["end"] <= final})
     level, moves = value_units(unit)
     projected, notes = await _projections(api, key) if req.projections else ([], [])
     out = MacroSeriesOutput(
@@ -312,7 +305,7 @@ async def _read(api: Tauric, req: MacroSeriesRequest) -> Result:
         latest=Latest(period=last["period"]["label"], value=last["value"]),
         changes=Changes(**{k: v for k, v in ch.items() if v}),
         truncated=truncated,
-        missing=[label for _, label in gaps],
+        missing=gaps,
         periods_per_year=periods_per_year(s.get("frequency"), rows),
         dates=[o["period"]["end"] for o in rows],
         # labels that only repeat the date (2024-09 for 2024-09-30) say nothing more

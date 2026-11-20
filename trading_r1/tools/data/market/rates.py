@@ -62,7 +62,8 @@ _YEARS = {
     "20y": 20.0,
     "30y": 30.0,
 }  # tenor to years to maturity, in maturity order
-_PAGE = 110  # Tauric's most observations per response
+_PAGE = 100  # Tauric's most observations per response
+_BEFORE_SERIES = "insufficient_history"  # Tauric's refusal of a window before a series begins
 _MAX_DAYS = 260  # about a year of business days
 _BP_PER_PCT = 100
 _BUSINESS_DAYS_PER_YEAR = 252  # annualizes the volatility of daily yield changes
@@ -146,24 +147,30 @@ async def _curve(api: Tauric, date: dt.date | None) -> tuple[dict[str, Any], dic
     tenors = {k: points[k]["latest"]["value"] for k in _YEARS if k in points}
     # a tenor not published on this date can still have history inside a window ending here
     absent = {
-        str(m["label"]).lower(): str(m["key"])
-        for m in body.get("missing") or []
-        if str(m.get("label", "")).lower() in _YEARS
+        m["label"].lower(): m["key"]
+        for m in (body.get("population") or {}).get("missing") or []
+        if (m.get("label") or "").lower() in _YEARS
     }
-    series = {k: str(points[k]["series"]) for k in tenors} | absent
+    series = {k: points[k]["series"]["key"] for k in tenors} | absent
     series = {k: key.removeprefix("series:") for k, key in series.items()}
     return {"date": body["curve_date"], "tenors_pct": tenors}, series
 
 
 async def _tenor_history(api: Tauric, key: str, end: str, days: int) -> list[dict[str, Any]]:
-    """The newest ``days`` observations of one tenor's series on or before ``end``."""
+    """The newest ``days`` observations of one tenor's series on or before ``end``; none for a
+    tenor whose series begins after ``end``."""
     found: list[dict[str, Any]] = []
     cursor: str | None = end
     while cursor and len(found) < days:
-        body = await api.get(
-            f"/series/{key}/observations", end=cursor, limit=min(_PAGE, days - len(found))
-        )
-        page = body.get("observations") or []
+        try:
+            body = await api.get(
+                f"/series/{key}/observations", end=cursor, limit=min(_PAGE, days - len(found))
+            )
+        except ToolError as err:
+            if err.code != _BEFORE_SERIES:
+                raise
+            break
+        page = body.get("data") or []
         if not page:
             break
         found = page + found
@@ -273,7 +280,7 @@ async def _handler(req: MarketRatesRequest) -> Result:
     async with Tauric() as api:
         latest, series = await _curve(api, req.date)
         rows = [latest] if req.days == 1 else await _window(api, latest, series, req.days)
-    return curve_response(rows or [latest], _SOURCE, requested_days=req.days, limits=api.limits)
+    return curve_response(rows, _SOURCE, requested_days=req.days, limits=api.limits)
 
 
 SPEC = ToolSpec(
