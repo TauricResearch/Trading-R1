@@ -42,17 +42,19 @@ _DESCRIPTION = (
     "price, value, shares owned after) and totals of open-market purchases (code P) and sales "
     "(code S), whole and `by_insider`, over six months or the window `start` and `end` set; "
     "awards, exercises and gifts are listed but not counted as trades. Tauric serves about the "
-    "past year of transactions; `served_from` gives the date they begin. "
+    "past year of transactions; `served_from` gives the date they begin; `capped` marks totals "
+    "cut short at the row cap. "
     "short_interest: shares short, days to cover (short ratio) and short interest as a share "
     "of the float (US listings; the prior month's figure is not available)."
 )
 View = Literal["holders", "insiders", "short_interest"]
-_PAGE = 14  # Tauric's most insider transactions per response
+_PAGE = 25  # Tauric's most insider transactions per response
 _HOLDERS = 10  # managers shown
-_HOLDER_LINES = 36  # Tauric's most 13F lines per response, by value
+_HOLDER_PAGE = 25  # Tauric's most 13F lines per response, by value
+_HOLDER_PAGES = 4  # pages read to find the largest managers
 _TOTAL_MONTHS = 6
-_MAX_PAGES = 10  # a backstop on the six-month totals: 140 transactions
-_MAX_WINDOW_PAGES = 50  # a window asked for by date: 700 transactions
+_MAX_PAGES = 10  # a backstop on the six-month totals: 250 transactions
+_MAX_WINDOW_PAGES = 30  # a window asked for by date: 750 transactions
 _TRADERS_SHOWN = 30  # a window's insiders, in full
 _TRADE = ("count", "shares", "value")
 
@@ -63,7 +65,7 @@ class OwnershipRequest(BaseModel):
     symbol: Symbol = Field(..., description="Equity ticker (e.g. AAPL).")
     view: View = Field("holders", description="holders, insiders or short_interest.")
     limit: int = Field(
-        14, ge=1, le=_PAGE, description="insiders view: most recent transactions to return."
+        10, ge=1, le=_PAGE, description="insiders view: most recent transactions to return."
     )
     start: dt.date | None = Field(
         None, description="insiders view: first transaction date (default: six months back)."
@@ -96,7 +98,7 @@ class Holders(BaseModel):
     institutions: Fraction = None
     lines_read: Count = None  # the largest lines the managers were found among
     report_period: Day = None
-    period_state: Code = None  # how complete Tauric says this quarter's filings are
+    period_complete: bool | None = None  # whether Tauric covers this quarter's filing days
     compared_to: Day = None
     quarters: list[Day] = []  # the quarters Tauric serves, newest first
     managers: list[Manager] = []
@@ -146,8 +148,7 @@ class Insiders(BaseModel):
     window_end: Day = None
     served_from: Day = None  # the earliest transaction date Tauric serves
     count: Count
-    complete: bool
-    notes: list[Text] = []
+    capped: bool  # the row cap stopped the count: totals cover the newest rows only
     totals: Totals
     by_insider: Annotated[list[Trader], hint(rows=_TRADERS_SHOWN)] = []  # largest value first
     transactions: list[Transaction]
@@ -170,35 +171,47 @@ class OwnershipOutput(Output):
     notes: list[Text] = []
 
 
+def _replaces(filing: dict[str, Any]) -> bool:
+    """An original report, a restatement, or an amendment Tauric flags to read as one."""
+    amendment = filing.get("amendment")
+    return (
+        amendment is None
+        or amendment.get("type") == "RESTATEMENT"
+        or "read_as_replacement" in (filing.get("flags") or [])
+    )
+
+
+def _current(filings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A manager's current filings for the quarter: its latest original or restatement and the
+    new-holdings amendments filed after it."""
+    filings = sorted(
+        filings, key=lambda f: (f["filed"], (f.get("amendment") or {}).get("number") or 0)
+    )
+    bases = [i for i, f in enumerate(filings) if _replaces(f)]
+    return filings[bases[-1] if bases else 0 :]
+
+
 def _managers(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """The largest managers by CIK. A 13F report is filed as lines (one per class, discretion and
     co-manager), and each filing states its totals in the security; a manager's holding is the
-    sum over its current filings: its latest original or restatement plus the new-holdings
-    amendments after it, as Tauric marks them. The largest lines find the managers."""
+    sum over its current filings (`_current`). The largest lines find the managers."""
+    filings = body.get("filings") or {}
+    by_manager: dict[str, list[dict[str, Any]]] = {}
+    for acc in dict.fromkeys(h["accession"] for h in body.get("data") or []):
+        f = filings[acc]
+        by_manager.setdefault((f.get("manager") or {}).get("cik") or acc, []).append(f)
     managers: dict[str, dict[str, Any]] = {}
-    seen: set[str] = set()
-    for h in body.get("data") or []:
-        acc = h["accession"]
-        f = (body.get("filings") or {}).get(acc) or {}
-        if acc in seen or f.get("view_state", "current") != "current":
-            continue  # counted, or an amendment Tauric serves for the reader to judge
-        seen.add(acc)
-        who, totals = f.get("manager") or {}, f.get("security_totals") or {}
-        m = managers.setdefault(
-            who.get("cik") or acc,
-            {
-                "manager": who.get("name"),
-                "shares": 0,
-                "value": 0,
-                "lines": 0,
-                "filed": None,
-                "report_date": f.get("report_date"),
-            },
-        )
-        m["shares"] += totals.get("shares") or 0
-        m["value"] += totals.get("value") or 0
-        m["lines"] += totals.get("position_lines") or 0
-        m["filed"] = max(filter(None, (m["filed"], f.get("filed"))), default=None)
+    for cik, own in by_manager.items():
+        current = _current(own)
+        totals = [f.get("security_totals") or {} for f in current]
+        managers[cik] = {
+            "manager": (current[0].get("manager") or {}).get("name"),
+            "shares": sum(t.get("shares") or 0 for t in totals),
+            "value": sum(t.get("value") or 0 for t in totals),
+            "lines": sum(t.get("position_lines") or 0 for t in totals),
+            "filed": current[-1]["filed"],
+            "report_date": current[0].get("report_date"),
+        }
     return managers
 
 
@@ -226,11 +239,11 @@ def _holders(
     rows = sorted(managers.values(), key=lambda m: m["value"], reverse=True)[:_HOLDERS]
     cov = body.get("coverage") or {}
     return {
-        "insiders": profile.get("held_fraction_insiders"),
-        "institutions": profile.get("held_fraction_institutions"),
+        "insiders": profile.get("insider_ownership"),
+        "institutions": profile.get("institutional_ownership"),
         "lines_read": len(body.get("data") or []),
         "report_period": cov.get("period"),
-        "period_state": cov.get("period_state"),
+        "period_complete": cov.get("period_complete"),
         "compared_to": (before.get("coverage") or {}).get("period") if before else None,
         "quarters": _quarters(body),
         "managers": rows,
@@ -241,19 +254,28 @@ async def _holdings(
     api: Tauric, ticker: str, period: dt.date | None, compare: bool
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """A quarter's largest 13F lines (the latest unless `period` names one) and, when asked, the
-    quarter before's."""
+    quarter before's: pages by value until they name `_HOLDERS` managers."""
 
     async def lines(quarter: str | None) -> dict[str, Any]:
-        return await api.get(
-            f"/securities/{ticker}/institutional-holders",
-            limit=_HOLDER_LINES,
-            position="shares",
-            period=quarter,
-        )
+        path = f"/securities/{ticker}/institutional-holders"
+        body: dict[str, Any] = {}
+        rows: list[dict[str, Any]] = []
+        filings: dict[str, Any] = {}
+        after = None
+        for _ in range(_HOLDER_PAGES):
+            page = await api.get(
+                path, limit=_HOLDER_PAGE, position="shares", quarter=quarter, after=after
+            )
+            body = body or page
+            rows += page.get("data") or []
+            filings |= page.get("filings") or {}
+            after = page.get("next_cursor")
+            if after is None or len(_managers({"data": rows, "filings": filings})) >= _HOLDERS:
+                break
+        return body | {"data": rows, "filings": filings}
 
     body = await lines(period.isoformat() if period else None)
-    state = (body.get("coverage") or {}).get("period_state")
-    if period and (state == "not_covered" or not body.get("data")):
+    if period and not body.get("data"):
         raise ToolError(
             f"no 13F holders of {ticker} for {period}: Tauric serves the quarters "
             + ", ".join(_quarters(body))
@@ -338,41 +360,21 @@ async def _insiders(
     for _ in range(_MAX_WINDOW_PAGES if start or end else _MAX_PAGES):
         page = await api.get(path, start=since, end=last, limit=_PAGE, after=after)
         served_from = (page.get("coverage") or {}).get("from")
-        if last and served_from and last < served_from:
-            raise ToolError(
-                f"Tauric serves {ticker}'s insider transactions from {served_from}, so none "
-                f"through {last} can be read"
-            )
         filings = page.get("filings") or {}
-        rows += [
-            _transaction(t, filings)
-            for t in page.get("data") or []
-            if t.get("kind", "transaction") == "transaction"
-        ]
+        rows += [_transaction(t, filings) for t in page.get("data") or []]
         after = page.get("next_cursor")
         if after is None:
             break
-    complete = after is None
-    early = bool(served_from) and since < served_from
+    capped = after is not None
     return {
         "transactions": rows[:n],
         # a capped count covers only the newest rows: the window starts at the oldest counted
-        "window_start": (
-            (served_from if early else since)
-            if complete or not rows
-            else min(r["date"] for r in rows)
-        ),
+        "window_start": min(r["date"] for r in rows) if capped and rows else since,
         "window_end": last,
         "served_from": served_from,
-        "notes": [
-            f"Tauric serves these transactions from {served_from}: the part of the window before "
-            f"it, from {since}, is not counted."
-        ]
-        if early
-        else [],
         "totals": totals(rows),
         "by_insider": traders(rows),
-        "complete": complete,
+        "capped": capped,
         "count": len(rows),
     }
 
@@ -381,7 +383,7 @@ def _short(profile: dict[str, Any]) -> dict[str, Any]:
     fields = {
         "shares_short": "shares_short",
         "days_to_cover": "days_to_cover",
-        "short_of_float": "short_fraction_of_float",
+        "short_of_float": "short_interest_of_float",
     }
     return {k: profile[f] for k, f in fields.items() if profile.get(f) is not None}
 

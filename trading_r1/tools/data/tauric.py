@@ -10,8 +10,8 @@ pages of one tool call. Transient failures (timeouts, 429, 5xx) retry under the 
 policy; every other failure becomes a `ToolError` carrying Tauric's own message, which already
 says what to use instead ("use this key", "the standard pair is BTC-USDT"), and its `code` and
 `retry`. A failure with no answer from Tauric can pass with time: its `retry` is `later`. Limits
-Tauric states on the data it returns are kept in `limits` for the tool's notes (`stated_limits`).
-A successful answer
+Tauric states on the data it returns are kept in `limits` for the tool's notes (`stated_limits`),
+with Tauric's reason for each null value the tool read (`unavailable`). A successful answer
 whose `Cache-Control` states a `max-age` is reused until it runs out, with no request (`reuse.py`).
 """
 
@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+from trading_r1 import USER_AGENT
 from trading_r1.contract.spec import ToolError
 from trading_r1.runtime.retry import RETRYABLE_STATUS, is_transient_http, with_retry
 from trading_r1.state.runtime_config import runtime_config
@@ -41,56 +42,74 @@ def _failure(resp: Any, wrap: str = "{}", retry: str | None = None) -> ToolError
 # Value kinds that are not a measurement of what happened; `derived` and `unknown` say nothing
 # about a value that its series' name does not.
 _QUALIFIED_KINDS = frozenset({"estimate", "forecast", "projection", "model_output"})
-_REGISTRANT_LIMITS = {
-    "possibly_incomplete": "the SEC data may not include the newest records",
-    "temporarily_unavailable": "no current SEC data can be served yet, this is what was held",
-    "pending": "the latest 10-K or 10-Q's facts are not in yet",
-}
+# Where an answer says whether it is whole: `complete` (or `period_complete`), with its reason.
+_COMPLETENESS = ("complete", "period_complete")
+_SHOWN = 6  # missing periods named in a note, the rest counted
 
 
 def _subject(node: dict[str, Any]) -> str | None:
     """The instrument or series a node of an answer is about, without its kind."""
     for field in ("instrument", "series"):
-        about = node.get(field)
-        if isinstance(about, dict) and about.get("key"):
-            return about["key"].partition(":")[2] or about["key"]
+        about = dict.get(node, field)  # not a read of the answer (`Answer`)
+        key = dict.get(about, "key") if isinstance(about, dict) else None
+        if key:
+            return key.partition(":")[2] or key
     return None
 
 
+def _period(m: dict[str, Any]) -> str:
+    """A period of `coverage.missing` by its calendar unit: 2025-10, 2025-Q4, 2025, a day."""
+    start, kind = m["start"], m.get("kind")
+    if kind == "month":
+        return start[:7]
+    if kind == "quarter":
+        return f"{start[:4]}-Q{(int(start[5:7]) - 1) // 3 + 1}"
+    if kind == "calendar_year":
+        return start[:4]
+    end = m.get("end") or start
+    return start if end == start else f"{start} to {end}"
+
+
 def _node_limits(node: dict[str, Any], who: str, dated: bool) -> Iterator[str]:
-    """What one node states about itself: overdue data, a gap in its coverage, a stale price."""
-    fresh, cov = node.get("freshness"), node.get("coverage")
-    if not dated and isinstance(fresh, dict) and fresh.get("stale") is True:
+    """What one node states about itself: overdue data, an incomplete answer, periods not
+    published, a last close."""
+    if not dated and node.get("stale") is True:
         yield f"{who}: newer data is overdue."
-    if isinstance(cov, dict):
-        if cov.get("complete") is False and cov.get("complete_reason") == "possibly_incomplete":
-            yield f"{who}: days may be missing from this history."
-        if not dated and cov.get("pending_session"):
-            yield (
-                f"{who}: history ends {cov.get('through')}; the {cov['pending_session']} session "
-                "has closed and its bar is not available yet."
-            )
-        if cov.get("not_yet_served"):
-            yield f"{who}: {cov['not_yet_served']} filings the SEC lists are not served yet."
+    missing = node.get("missing")
+    periods = (
+        [m for m in missing if isinstance(m, dict) and m.get("start")]
+        if isinstance(missing, list)
+        else []
+    )
+    for field in _COMPLETENESS:
+        if f"{field}_reason" not in node or node.get(field) is True:
+            continue
+        reason = node[f"{field}_reason"]
+        if reason:
+            yield f"{who}: incomplete ({reason})."
+        elif node.get(field) is False and not periods:  # missing periods say what is short
+            yield f"{who}: incomplete."
+    by_reason: dict[str | None, list[str]] = {}
+    for m in periods:
+        by_reason.setdefault(m.get("reason"), []).append(_period(m))
+    for reason, labels in by_reason.items():
+        shown = ", ".join(labels[:_SHOWN]) + (
+            f" and {len(labels) - _SHOWN} more" if len(labels) > _SHOWN else ""
+        )
+        state = f"not served whole ({reason})" if reason else "not published"
+        yield f"{who}: {state}: {shown}."
     if node.get("quote_kind") == "last_close":
         yield f"{who}: the price is the {node.get('session_date')} close, not a live quote."
-    if node.get("cik") and (limit := _REGISTRANT_LIMITS.get(node.get("status"))):
-        yield f"{who}: {limit} (registrant {node['cik']})."
-    if isinstance(node.get("not_covered"), list) and node["not_covered"]:
-        yield "No observations available for: " + ", ".join(node["not_covered"]) + "."
-    if isinstance(node.get("status_only"), dict) and node["status_only"]:
-        yield "No value published for: " + ", ".join(node["status_only"]) + "."
 
 
 def stated_limits(body: Any, *, dated: bool = False) -> list[str]:
     """What Tauric states limits the values in an answer, as notes for its reader: data overdue,
-    a history short of a closed session, a last close standing for a quote, a value marked
-    unconfirmed, a value that is not an observation. Nothing when the answer is clean. Tauric
-    states other limits field by field; these are the ones that change how a value reads. An answer
-    read up to a given date (`dated`) says nothing about how current the data is: Tauric marks any
-    window that ends in the past as overdue."""
+    an answer that is not complete (with Tauric's reason), a last close standing for a quote, a
+    value marked provisional, a value that is not an observation. Nothing when the answer is
+    clean. An answer read up to a given date (`dated`) says nothing about how current the data
+    is: Tauric marks any window that ends in the past as overdue."""
     notes: list[str] = []
-    unconfirmed: dict[str, list[str]] = {}
+    provisional: dict[str, list[str]] = {}
     kinds: dict[tuple[str, str], list[str]] = {}
     whole: set[tuple[str, str]] = set()  # a series that is such throughout, not period by period
 
@@ -105,10 +124,12 @@ def stated_limits(body: Any, *, dated: bool = False) -> list[str]:
         notes.extend(n for n in _node_limits(node, who, dated) if n not in notes)
         states = node.get("field_states")
         for field, state in states.items() if isinstance(states, dict) else ():
-            if (state["state"], state["reason"]) == ("unverified", "unconfirmed"):
-                at = [p for p in path if p not in ("concepts", "values")]
-                when = f" ({node['period_end']})" if node.get("period_end") else ""
-                unconfirmed.setdefault(who, []).append(".".join((*at, field)) + when)
+            if isinstance(state, dict) and state.get("reason") == "provisional":
+                at = [p for p in path if p not in ("data", "values")]
+                period = node.get("period")
+                end = period.get("end") if isinstance(period, dict) else None
+                when = f" ({end})" if end else ""
+                provisional.setdefault(who, []).append(".".join((*at, field)) + when)
         if (kind := node.get("value_kind")) in _QUALIFIED_KINDS:
             period = node.get("period")
             labels = kinds.setdefault((who, kind), [])
@@ -121,16 +142,81 @@ def stated_limits(body: Any, *, dated: bool = False) -> list[str]:
                 scan(value, who, (*path, key))
 
     scan(body, "This data", ())
-    for who, fields in unconfirmed.items():
+    for who, fields in provisional.items():
         names = ", ".join(dict.fromkeys(fields))
-        notes.append(f"{who}: marked unconfirmed, check before relying on it: {names}.")
+        notes.append(f"{who}: marked provisional, check before relying on it: {names}.")
     for (who, kind), labels in kinds.items():
         which = "the whole series" if (who, kind) in whole else ", ".join(dict.fromkeys(labels))
         notes.append(f"{who}: not observed, {kind.replace('_', ' ')}: {which}.")
     return notes
 
 
-NOT_PUBLISHED = ("not_found", "not_supported")  # a settled absence, not a failure to read
+NOT_PUBLISHED = ("not_found", "not_supported", "not_published")  # a settled absence
+
+
+class Answer(dict):
+    """A JSON object of an answer that remembers which of its fields a tool read (`get`, `[]`),
+    so that a value the tool did not use is not explained to its reader."""
+
+    __slots__ = ("read",)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.read: set[str] = set()
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        self.read.add(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key: Any) -> Any:
+        self.read.add(key)
+        return super().__getitem__(key)
+
+
+def answer(node: Any) -> Any:
+    """`node` with every JSON object an `Answer`."""
+    if isinstance(node, dict):
+        return Answer({k: answer(v) for k, v in node.items()})
+    if isinstance(node, list):
+        return [answer(v) for v in node]
+    return node
+
+
+def unavailable(body: Any) -> list[str]:
+    """For each value a tool read that is null with a `field_states` entry, Tauric's reason,
+    and "ask again later" when its `retry` is `later`. A plain null says nothing; a provisional
+    value is noted by `stated_limits`."""
+    grouped: dict[tuple[str, str, str | None], list[str]] = {}
+
+    def scan(node: Any, who: str, path: tuple[str, ...]) -> None:
+        if isinstance(node, list):
+            for item in node:
+                scan(item, who, path)
+        if not isinstance(node, Answer):
+            return
+        if subject := _subject(node):
+            who, path = subject, ()
+        states = dict.get(node, "field_states")
+        for field, state in states.items() if isinstance(states, dict) else ():
+            if (
+                field in node.read
+                and dict.get(node, field, 0) is None
+                and isinstance(state, dict)
+                and state.get("reason") not in (None, "provisional")
+            ):
+                at = [p for p in path if p not in ("data", "values")]
+                key = (who, state["reason"], state.get("retry"))
+                grouped.setdefault(key, []).append(".".join((*at, field)))
+        for key, value in node.items():
+            if key != "field_states":
+                scan(value, who, (*path, key))
+
+    scan(body, "This data", ())
+    notes = []
+    for (who, reason, retry), fields in grouped.items():
+        later = "; ask again later" if retry == "later" else ""
+        notes.append(f"{who}: {', '.join(dict.fromkeys(fields))} not available ({reason}){later}.")
+    return notes
 
 
 class Tauric:
@@ -143,7 +229,8 @@ class Tauric:
         self._base = profile.base_url.rstrip("/")
         self._key = profile.resolve_api_key()
         self._client: Any = None
-        self.limits: list[str] = []  # what the answers so far state, for the tool's notes
+        self._stated: list[str] = []  # what the answers so far state about themselves
+        self._answers: list[Any] = []
 
     async def __aenter__(self) -> Tauric:
         import httpx
@@ -157,7 +244,9 @@ class Tauric:
         data = runtime_config().data
         timeout = httpx.Timeout(data.read_timeout_s, connect=data.connect_timeout_s)
         self._client = httpx.AsyncClient(
-            base_url=self._base, timeout=timeout, headers={"Authorization": f"Bearer {self._key}"}
+            base_url=self._base,
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {self._key}", "User-Agent": USER_AGENT},
         )
         return self
 
@@ -183,8 +272,18 @@ class Tauric:
 
     def _keep_limits(self, body: Any, dated: bool = False) -> Any:
         found = stated_limits(body, dated=dated)
-        self.limits.extend(n for n in found if n not in self.limits)
-        return body
+        self._stated.extend(n for n in found if n not in self._stated)
+        self._answers.append(kept := answer(body))
+        return kept
+
+    @property
+    def limits(self) -> list[str]:
+        """What the answers so far state, for the tool's notes: `stated_limits`, and why a value
+        the tool read is null (`unavailable`)."""
+        notes = list(self._stated)
+        for body in self._answers:
+            notes.extend(n for n in unavailable(body) if n not in notes)
+        return notes
 
     async def _send(self, method: str, path: str, **kwargs: Any) -> tuple[Any, Any]:
         import httpx

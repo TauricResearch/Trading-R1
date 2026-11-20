@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The equity snapshot every valuation-side tool shares: Tauric's profile (ratios, size,
-classification), the analyst consensus, and trailing-twelve-month figures from the filings.
+classification), the analyst consensus, the calendar's next report, and trailing-twelve-month
+figures from the filings.
 
 One place for what fundamentals, ratios, comps and reference all need, so a figure has one
 definition. Profile ratios are as Tauric publishes them (fractions: margins, growth, ROE, yield);
@@ -16,7 +17,7 @@ from typing import Any
 
 from trading_r1.contract.spec import ToolError
 from trading_r1.tools.data.equity import statements
-from trading_r1.tools.data.tauric import Tauric
+from trading_r1.tools.data.tauric import NOT_PUBLISHED, Tauric
 
 # the flows each tool's TTM figures are built from
 INCOME_LINES = (
@@ -45,9 +46,32 @@ async def analyst(api: Tauric, ticker: str) -> dict[str, Any] | None:
     try:
         return await api.get(f"/securities/{ticker}/analyst")
     except ToolError as err:
-        if err.code == "not_published":
+        if err.code in NOT_PUBLISHED:
             return None
         raise
+
+
+async def calendar(api: Tauric, ticker: str) -> tuple[dict[str, Any], str | None]:
+    """The calendar and, when it could not be read, why: what Tauric does not publish is
+    absent, and any other failure leaves the next report unknown (the rest of a tool's answer
+    stands)."""
+    try:
+        return await api.get(f"/securities/{ticker}/calendar"), None
+    except ToolError as err:
+        if err.code in NOT_PUBLISHED:
+            return {}, None
+        return {}, f"the calendar could not be read ({err}): the next report is unknown"
+
+
+def next_report(calendar: dict[str, Any]) -> dict[str, Any]:
+    """The next report on the calendar: its date and consensus EPS and revenue estimates."""
+    earnings = calendar.get("earnings") or {}
+    fields = {
+        "date": "earnings_date",
+        "eps_estimate": "eps_estimate",
+        "revenue_estimate": "revenue_estimate",
+    }
+    return {k: earnings[f] for k, f in fields.items() if earnings.get(f) is not None}
 
 
 async def ttm_figures(api: Tauric, ticker: str, *, full: bool = True) -> dict[str, Any]:

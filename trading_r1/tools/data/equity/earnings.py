@@ -21,26 +21,20 @@ from pydantic import BaseModel, Field
 from trading_r1.contract.spec import Output, Provenance, Result, ToolError, ToolSpec
 from trading_r1.contract.units import Code, Count, Day, Fraction, Money, Price, Text
 from trading_r1.tools.data.common import Symbol
-from trading_r1.tools.data.equity import statements
-from trading_r1.tools.data.tauric import NOT_PUBLISHED, Tauric, provenance
+from trading_r1.tools.data.equity import snapshot, statements
+from trading_r1.tools.data.tauric import Tauric, provenance
 
 _DESCRIPTION = (
     "Earnings record and next report for a public equity: per fiscal quarter the reported "
     "diluted EPS, revenue and net income from the filings, with EPS and revenue growth on the "
     "quarter a year earlier (newest first; a fiscal Q4's EPS is not filed and is left out); "
-    "and the report on the calendar (next, or latest until the next is set) with its "
-    "consensus EPS and revenue estimates; the "
+    "and the next report on the calendar with its consensus EPS and revenue estimates; the "
     "dividend on the calendar (next or last; its amount when announced). Consensus estimates "
     "and surprises for past quarters are not available. Quarters are given by period end, with "
     "no fiscal quarter name. Amounts are in `currency`, the "
     "reporting currency. For ratings and price targets use data.equity.estimates."
 )
 _LINES = ("revenue", "net_income", "diluted_eps")
-_NEXT = {
-    "date": "earnings_date",
-    "eps_estimate": "eps_estimate",
-    "revenue_estimate": "revenue_estimate",
-}
 
 
 class EquityEarningsRequest(BaseModel):
@@ -48,18 +42,6 @@ class EquityEarningsRequest(BaseModel):
 
     symbol: Symbol = Field(..., description="Equity ticker (e.g. AAPL).")
     quarters: int = Field(8, ge=1, le=12, description="Past quarters to return, newest first.")
-
-
-async def _calendar(api: Tauric, ticker: str) -> tuple[dict[str, Any], str | None]:
-    """The calendar and, when it could not be read, why: what Tauric does not publish is
-    absent, and any other failure leaves the next report and dividend unknown (the filings still
-    answer)."""
-    try:
-        return await api.get(f"/securities/{ticker}/calendar"), None
-    except ToolError as err:
-        if err.code in NOT_PUBLISHED:
-            return {}, None
-        return {}, f"the calendar could not be read ({err}): next report and dividend unknown"
 
 
 class Quarter(BaseModel):
@@ -72,17 +54,15 @@ class Quarter(BaseModel):
 
 
 class Report(BaseModel):
-    """The report on the calendar: next (`upcoming`), or the latest until the next is set."""
+    """The next report on the calendar."""
 
     date: Day = None
-    upcoming: bool
     eps_estimate: Price = None
     revenue_estimate: Money = None
 
 
 class Dividend(BaseModel):
     ex_date: Day
-    payment_date: Day = None
     amount: Price = None  # not yet announced
     upcoming: bool
 
@@ -111,8 +91,6 @@ def _notes(history: list, asked: int, currency: str | None, report: dict | None)
             "the calendar states no currency for its estimates; a foreign filer's revenue "
             "estimate may be in its reporting currency"
         )
-    if report and not report["upcoming"] and report.get("eps_actual") is None:
-        out.append("the latest report's actuals are not published yet")
     return out
 
 
@@ -141,18 +119,22 @@ async def _handler(req: EquityEarningsRequest) -> Result:
     limits = statements.limits_for("income", True, n)
     async with Tauric() as api:
         (calendar, calendar_failure), facts = await asyncio.gather(
-            _calendar(api, ticker), statements.load_facts(api, ticker, "income", limits, _LINES)
+            snapshot.calendar(api, ticker),
+            statements.load_facts(api, ticker, "income", limits, _LINES),
         )
     series = statements.statement_series(facts, "income", n, quarterly=True, keys=_LINES)
     history = _history(series)[: req.quarters]
-    earnings = calendar.get("earnings") or {}
     today = dt.date.today().isoformat()
-    next_report = {k: earnings[f] for k, f in _NEXT.items() if earnings.get(f) is not None}
-    if next_report:
-        next_report["upcoming"] = next_report.get("date", today) >= today
+    next_report = snapshot.next_report(calendar)
     if not history and not next_report:
         raise ToolError(f"no earnings data for '{ticker}': funds and indices have none")
     currency = statements.currency(facts["quarterly"] | facts["annual"])
+    dividends = [
+        {k: d.get(k) for k in ("ex_date", "amount")}
+        | {"upcoming": (d.get("ex_date") or "") >= today}
+        for d in calendar.get("dividends") or []
+        if d.get("ex_date")
+    ]
     out = EarningsOutput(
         ticker=ticker,
         currency=currency,
@@ -162,12 +144,7 @@ async def _handler(req: EquityEarningsRequest) -> Result:
         + ([calendar_failure] if calendar_failure else [])
         + api.limits,
         next_report=next_report or None,
-        dividends=[
-            {k: d.get(k) for k in ("ex_date", "payment_date", "amount")}
-            | {"upcoming": (d.get("ex_date") or "") >= today}
-            for d in calendar.get("dividends") or []
-            if d.get("ex_date")
-        ],
+        dividends=dividends,
     )
     return Result(
         out,

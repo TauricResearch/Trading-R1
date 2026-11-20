@@ -35,7 +35,7 @@ _DESCRIPTION = (
     "basis, `period_return.total`; the latest bar is the traded close); every other class "
     "is on the quoted price (`period_return.price`). `period` counts back from today; `end` "
     "reads a past window (period '1mo' with end 2020-03-31 is March 2020) and `start` opens one "
-    "on a date, and every figure then describes that window. Intraday 15m and 60m bars are for "
+    "on a date, and every figure then describes that window. Intraday 15m and 1h bars are for "
     "listed securities only. History: ten years for listed securities; indices, futures and FX "
     "from 2021-09-27 (a future's returns across a roll include the roll; FX has no daily close, "
     "so its series is the daily open snapshot, open to open, with each day's high and low); "

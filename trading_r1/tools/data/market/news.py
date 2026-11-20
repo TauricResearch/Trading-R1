@@ -72,8 +72,8 @@ def _story(raw: dict) -> dict | None:
 
 async def _handler(req: NewsRequest) -> Result:
     window = {
-        "since": req.start and f"{req.start.isoformat()}T00:00:00Z",
-        "until": req.end and f"{req.end.isoformat()}T23:59:59.999999Z",
+        "start": req.start and f"{req.start.isoformat()}T00:00:00Z",
+        "end": req.end and f"{req.end.isoformat()}T23:59:59.999999Z",
         "sentiment": req.sentiment,
         "instrument": req.symbol and f"security:{req.symbol}",
         "limit": NEWS_PAGE,
@@ -93,8 +93,8 @@ async def _handler(req: NewsRequest) -> Result:
     if not items:
         scope = f" for '{req.symbol}'" if req.symbol else ""
         matched = f" matched {req.query!r}" if req.query else ""
-        widen = "widen the dates, " if req.start or req.end else ""
-        raise ToolError(f"no news{matched}{scope}: {widen}or try `search`")
+        widen = "widen the dates or " if req.start or req.end else ""
+        raise ToolError(f"no news{matched}{scope}: {widen}try `search`")
     articles.number(items)
     return Result(
         NewsOutput(symbol=req.symbol, query=req.query, items=items),

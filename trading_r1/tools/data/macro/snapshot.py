@@ -6,7 +6,8 @@
 A dashboard read: for one of Tauric's categories (inflation, labour, growth, yields, policy
 rates, credit and stress, consumer, housing and business, trade, money supply), every series'
 newest observation with its change on the previous period and on the year before, as Tauric
-computes them. For a series' history, data.macro.series.
+computes them, and the members Tauric serves no value for. For a series' history,
+data.macro.series.
 """
 
 from __future__ import annotations
@@ -34,7 +35,8 @@ _DESCRIPTION = (
     "Housing & Business, Trade & Global, Money Supply): each series' newest value and period "
     "with its change on the previous period and on the year before (percentage points for "
     "rates, percent for a positive level, otherwise the amount), the publisher's figures, and "
-    "the series key. Use to frame the economy or a "
+    "the series key; `no_value` lists the category's series Tauric serves no value for, with "
+    "its reason. Use to frame the economy or a "
     "theme before drilling into one series with data.macro.series (keys are in `series`)."
 )
 Category = Literal[CATEGORIES]  # type: ignore[valid-type]
@@ -46,11 +48,12 @@ class MacroSnapshotRequest(BaseModel):
     category: Category = Field(..., description="The category to read.")
 
 
-# Tauric's change bases: by period for periodic series, by stored observation for daily ones
+# Tauric's change bases: by period for periodic series, by observation for daily ones
 _BASES = {
-    "previous": ("previous_period", "previous_stored"),
-    "year_ago": ("year_ago", "year_ago_nearest_stored"),
+    "previous": ("previous_period", "previous_observation"),
+    "year_ago": ("year_ago", "year_ago_nearest"),
 }
+_PAGE = 25  # Tauric's most members per response
 
 
 class Reading(BaseModel):
@@ -78,6 +81,7 @@ class MacroSnapshotOutput(Output):
 
     category: Code
     series: Annotated[list[Reading], hint(rows=20)]  # a category whole (at most ~15)
+    no_value: list[Code] = []  # members served without a value: `key` or `key (reason)`
     notes: list[Text] = []
 
 
@@ -94,8 +98,8 @@ def _change(changes: list[dict[str, Any]], basis: str, unit: dict[str, Any]) -> 
         f"{basis}_from": (c.get("from_period") or {}).get("label"),
         f"{basis}_change": c["absolute"] * stated / own,
     }
-    if unit.get("kind") not in RATE_UNITS and c.get("change_percent") is not None:
-        out[f"{basis}_relative"] = c["change_percent"] / 100
+    if unit.get("kind") not in RATE_UNITS and c.get("percent") is not None:
+        out[f"{basis}_relative"] = c["percent"] / 100
     return out
 
 
@@ -118,15 +122,37 @@ def _row(key: str, m: dict[str, Any]) -> Reading | None:
     )
 
 
+def _no_value(body: dict[str, Any], category: str) -> list[str]:
+    """The category's members Tauric's `population` counts as missing, with the reason it gives."""
+    members = {m for g in body.get("groups") or [] if g["key"] == category for m in g["members"]}
+    return [
+        key + (f" ({m['reason']})" if m.get("reason") else "")
+        for m in (body.get("population") or {}).get("missing") or []
+        if m["key"] in members
+        for key in [m["key"].removeprefix("series:")]
+    ]
+
+
 async def _handler(req: MacroSnapshotRequest) -> Result:
     async with Tauric() as api:
-        body = await api.get("/markets/macro/snapshot", category=req.category)
-    rows = [r for m in body.get("data") or [] if (r := _row(m["key"], m))]
+        body = await api.get("/markets/macro/snapshot", category=req.category, limit=_PAGE)
+        members = list(body.get("data") or [])
+        while cursor := body.get("next_cursor"):
+            body = await api.get(
+                "/markets/macro/snapshot", category=req.category, limit=_PAGE, after=cursor
+            )
+            members += body.get("data") or []
+    rows = [r for m in members if (r := _row(m["key"], m))]
     if not rows:
         raise ToolError(f"no {req.category} readings available right now")
     ends = [r.period_end for r in rows if r.period_end]
     return Result(
-        MacroSnapshotOutput(category=req.category, series=rows, notes=api.limits),
+        MacroSnapshotOutput(
+            category=req.category,
+            series=rows,
+            no_value=_no_value(body, req.category),
+            notes=api.limits,
+        ),
         Provenance(**provenance(subject=req.category, as_of=max(ends, default=None))),
     )
 

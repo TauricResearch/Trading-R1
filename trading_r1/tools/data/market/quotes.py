@@ -69,10 +69,11 @@ class MarketQuotesOutput(Output):
 def _quote(q: dict[str, Any]) -> Quote:
     day = q.get("day") or {}
     span = q.get("range_52w") or {}
+    change = q.get("change") or {}
     return Quote(
         price=q.get("price"),
-        change=q.get("change"),
-        change_pct=q.get("change_percent"),
+        change=change.get("absolute"),
+        change_pct=change.get("percent"),
         previous_close=(q.get("previous_close") or {}).get("value"),
         day_high=day.get("high"),
         day_low=day.get("low"),
@@ -81,7 +82,7 @@ def _quote(q: dict[str, Any]) -> Quote:
         low_52w=span.get("low"),
         currency=(q.get("instrument") or {}).get("currency"),
         market_state=q.get("market_state"),
-        as_of=q.get("source_time"),
+        as_of=q.get("price_time"),
         session_date=q.get("session_date"),
     )
 
@@ -106,7 +107,8 @@ async def _handler(req: MarketQuotesRequest) -> Result:
         raise ToolError("no symbol could be quoted: " + "; ".join(left_out.values()))
     async with Tauric() as api:
         body = await api.post("/quotes", {"instruments": list(asked)})
-    data, errors = body.get("quotes") or {}, body.get("errors") or {}
+    data = {q["key"]: q for q in body.get("data") or []}
+    errors = {e["key"]: e.get("error") or {} for e in body.get("errors") or []}
     quotes: dict[str, Quote] = {}
     for key, spellings in asked.items():
         if key in data and data[key].get("price") is not None:
@@ -114,7 +116,7 @@ async def _handler(req: MarketQuotesRequest) -> Result:
             label = labels[key] if labels[key] not in quotes else key
             quotes[label] = _quote(data[key])
         else:
-            why = (errors.get(key) or {}).get("message") or "no price right now"
+            why = errors.get(key, {}).get("message") or "no price right now"
             left_out.update({symbol: why for symbol in spellings})
     if not quotes:
         raise ToolError("no quotes available: " + "; ".join(left_out.values()))

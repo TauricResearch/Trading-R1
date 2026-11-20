@@ -11,7 +11,6 @@ verify, not a source.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -24,7 +23,7 @@ from trading_r1.contract.spec import (
     ToolSpec,
     rendered,
 )
-from trading_r1.contract.units import Code, Day, Text
+from trading_r1.contract.units import Code, Count, Day, Text
 from trading_r1.tools.data import articles
 from trading_r1.tools.data.articles import Cited
 from trading_r1.tools.data.tauric import Tauric, provenance
@@ -38,7 +37,6 @@ _DESCRIPTION = (
     "numbers, and open them with `visit` when the summary is not enough (the digest is "
     "machine-written; the articles are the sources)."
 )
-_VERIFY = "Machine-written from the day's articles: cite the sources [N], verify through them."
 
 
 class MarketDigestRequest(BaseModel):
@@ -71,23 +69,24 @@ class MarketDigestOutput(Output):
     """The digest with its claims' citations as the run's source numbers `[N]` (Tauric's
     article ids outside a run), and the cited articles under those numbers."""
 
-    model_config = rendered(then=_VERIFY)
+    model_config = rendered(then=articles.VERIFY)
 
     date: Day
     note: Text = None  # the requested day had no digest
     authorship: Code = None
     content: DigestContent
+    cited: Count  # articles the claims cite; `sources` holds those resolved
     sources: list[Cited]
 
 
-def _content(raw: dict[str, Any], cite: Callable[[str], str]) -> DigestContent:
-    """The digest's content with every cited `[id]` read as its source number."""
+def _content(raw: dict[str, Any], numbers: dict[str, int | str]) -> DigestContent:
+    """The digest's content with every claim citing its articles by source number."""
     return DigestContent(
-        headline=raw.get("headline"),
+        headline=articles.renumber(raw.get("headline") or "", numbers) or None,
         themes=[
             Theme(
                 name=t.get("name") or "",
-                summary=cite(t.get("summary") or ""),
+                summary=articles.claim(t.get("summary"), t.get("article_ids") or [], numbers),
             )
             for t in raw.get("themes") or []
         ],
@@ -95,12 +94,12 @@ def _content(raw: dict[str, Any], cite: Callable[[str], str]) -> DigestContent:
             Story(
                 polarity=x.get("polarity"),
                 event_type=x.get("event_type"),
-                text=cite((x.get("text") or "") + articles.cites(x)),
+                text=articles.claim(x.get("text"), x.get("article_ids") or [], numbers),
                 instruments=x.get("instruments") or [],
             )
             for x in raw.get("top_stories") or []
         ],
-        watch_items=[cite(w) for w in raw.get("watch_items") or []],
+        watch_items=[articles.renumber(w, numbers) for w in raw.get("watch_items") or []],
         instruments=raw.get("instruments") or [],
     )
 
@@ -111,19 +110,13 @@ async def _handler(req: MarketDigestRequest) -> Result:
         content = body.get("content") or {}
         if not content:
             raise ToolError("no market digest for that day")
-        ids = articles.cited_ids(content)
-        sources = await articles.resolve(api, ids)
-    numbers = articles.number(sources)
-    cited = set(ids)
-
-    def cite(text: str) -> str:
-        return articles.renumber(text, numbers, cited)
-
+        ids, sources, numbers = await articles.sourced(api, content)
     out = MarketDigestOutput(
         date=body.get("digest_date"),
         note=note,
         authorship=body.get("authorship"),
-        content=_content(content, cite),
+        content=_content(content, numbers),
+        cited=len(ids),
         sources=sources,
     )
     return Result(

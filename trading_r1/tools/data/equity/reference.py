@@ -31,7 +31,7 @@ _PROFILE_FIELDS = {
     "industry": "industry",
     "sub_industry": "sub_industry",
     "country": "country",
-    "long_business_summary": "business_summary",
+    "long_business_summary": "description",
     "website": "website",
     "employees": "employees",
     "market_cap": "market_cap",

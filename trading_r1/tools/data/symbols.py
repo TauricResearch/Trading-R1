@@ -99,7 +99,7 @@ def _crypto(base: str, quote: str) -> Instrument:
     """Tauric quotes crypto in stablecoins: a USD pair is served as its USDT pair."""
     served = "USDT" if quote == "USD" else quote
     pair = f"{base}-{served}"
-    note = f"{base}-USD is served as {pair}: quoted in USDT, not USD" if quote == "USD" else None
+    note = f"{base}-USD is served as {pair}: quoted in USDT, not USD." if quote == "USD" else None
     return Instrument("crypto", f"crypto:{pair}", f"/crypto/pairs/{pair}", pair, note)
 
 

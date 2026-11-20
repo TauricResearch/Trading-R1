@@ -138,13 +138,13 @@ async def remote() -> RemoteSessions:
     return RemoteSessions(
         sessions=[
             RemoteSession(
-                id=v["session_id"],
+                id=v["id"],
                 label=v["metadata"].get("label"),
                 size=int(v.get("size", 0)),
                 updated_at=v.get("updated_at"),
             )
             for v in listed
-            if v["session_id"] not in here | gone
+            if v["id"] not in here | gone
         ]
     )
 

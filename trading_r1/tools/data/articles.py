@@ -12,18 +12,22 @@ import datetime as dt
 import re
 from typing import Annotated, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from trading_r1.contract.spec import ToolError, hint
-from trading_r1.contract.units import Code, Count, Day, Number, Text
+from trading_r1.contract.units import Code, Count, Day, Text, Unit
 from trading_r1.runtime.sources import cite_source, in_run
-from trading_r1.tools.data.tauric import Tauric
+from trading_r1.tools.data.tauric import NOT_PUBLISHED, Tauric
 
 _SUMMARY_CHARS = 280  # the link carries the article
+VERIFY = (
+    "Machine-generated from the articles Tauric collects: verify a claim through its sources, "
+    "and open them with `visit`."
+)
 # A backstop on cited articles resolved per call; past it,
 # each claim keeps its first sources before any claim gets a second.
 MAX_SOURCES = 80
-NEWS_PAGE = 21  # Tauric's most news items per response
+NEWS_PAGE = 25  # Tauric's most news items per response
 
 
 class Article(BaseModel):
@@ -31,8 +35,9 @@ class Article(BaseModel):
     run), time and its basis (published, or first seen by Tauric), publisher and the
     publishers of syndicated copies (or their count), headline, Tauric's read, link and summary."""
 
-    source: Number = None  # what claims cite it by: the run's [N], or its Tauric id
-    id: Annotated[int | None, hint(hidden=True)] = None
+    # what claims cite it by: the run's [N], or its Tauric id
+    source: Annotated[int | str | None, Field(json_schema_extra={"unit": Unit.CODE.value})] = None
+    id: Annotated[str | None, hint(hidden=True)] = None
     published: Day = None
     time_basis: Code = None
     publisher: Code = None
@@ -60,7 +65,7 @@ def article(raw: dict[str, Any]) -> dict[str, Any] | None:
     if not title:
         return None
     e = raw.get("annotations") or {}
-    summary = " ".join((e.get("summary") or "").split())
+    summary = " ".join(" ".join(e.get("summary") or []).split())
     if len(summary) > _SUMMARY_CHARS:
         summary = summary[: _SUMMARY_CHARS - 1].rstrip() + "…"
     return {
@@ -96,26 +101,10 @@ def collapse(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(first.values())
 
 
-def when(item: dict[str, Any]) -> str:
-    """An article's time to the minute, saying whether it is the publisher's or the moment
-    Tauric first saw the article (the publisher's time is often not stated)."""
-    stamp = item.get("published")
-    if not stamp:
-        return "time n/a"
-    try:
-        moment = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    except ValueError:
-        return stamp
-    if moment.tzinfo is not None:
-        moment = moment.astimezone(dt.UTC)
-    t = moment.strftime("%Y-%m-%d %H:%M UTC")
-    return t if item.get("time_basis") == "published" else f"{t} (first seen)"
-
-
-def cited_ids(*blocks: Any) -> list[int]:
+def cited_ids(*blocks: Any) -> list[str]:
     """Every cited article id under the given content, without repeats, ordered so each claim's
     first source comes before any claim's second (a cap then keeps every claim sourced)."""
-    claims: list[list[int]] = []
+    claims: list[list[str]] = []
 
     def walk(x: Any) -> None:
         if isinstance(x, dict):
@@ -129,7 +118,7 @@ def cited_ids(*blocks: Any) -> list[int]:
 
     for b in blocks:
         walk(b)
-    seen: dict[int, None] = {}
+    seen: dict[str, None] = {}
     for rank in range(max((len(c) for c in claims), default=0)):
         for c in claims:
             if rank < len(c):
@@ -137,34 +126,41 @@ def cited_ids(*blocks: Any) -> list[int]:
     return list(seen)
 
 
-async def resolve(api: Tauric, ids: list[int]) -> list[dict[str, Any]]:
-    """The first `MAX_SOURCES` cited articles as {id, title, publisher, published, url};
-    an article Tauric no longer serves is left out."""
+async def resolve(api: Tauric, ids: list[str]) -> list[dict[str, Any]]:
+    """The first `MAX_SOURCES` cited articles, each as `article` gives it; an article Tauric no
+    longer serves, or one without a link, is left out."""
 
-    async def one(i: int) -> dict[str, Any] | None:
+    async def one(i: str) -> dict[str, Any] | None:
         try:
             a = article(await api.get(f"/news/{i}"))
         except ToolError:
             return None
-        keep = a and a.get("url")  # an article without a link cannot be a source
-        keys = ("id", "title", "publisher", "published", "time_basis", "url", "summary")
-        return keep and {k: a[k] for k in keys}
+        return a if a and a.get("url") else None  # an article without a link is no source
 
     got = await asyncio.gather(*(one(i) for i in ids[:MAX_SOURCES]))
     return [a for a in got if a]
+
+
+async def sourced(
+    api: Tauric, content: dict[str, Any]
+) -> tuple[list[str], list[dict[str, Any]], dict[str, int | str]]:
+    """The articles a digest's or thesis's claims cite: their ids, those resolved, and the
+    numbers the claims cite them by (`number`)."""
+    ids = cited_ids(content)
+    sources = await resolve(api, ids)
+    return ids, sources, number(sources)
 
 
 _LEAD_CHARS = 160  # a rail line or two
 
 
 def lead(summary: str | None) -> str:
-    """An article's first point, for the rail: Tauric's summaries are "- point - point"."""
-    text = (summary or "").strip().removeprefix("- ")
-    first = text.split(" - ", 1)[0].strip()
-    return first if len(first) <= _LEAD_CHARS else first[: _LEAD_CHARS - 1].rstrip() + "…"
+    """The start of an article's summary, for the rail."""
+    text = summary or ""
+    return text if len(text) <= _LEAD_CHARS else text[: _LEAD_CHARS - 1].rstrip() + "…"
 
 
-def number(items: list[dict[str, Any]]) -> dict[int, int]:
+def number(items: list[dict[str, Any]]) -> dict[str, int | str]:
     """Add each article to the run's sources and set its `source`, the number claims cite it
     by: its `[N]` in a run (none for an article without a link), its Tauric id outside one.
     Returns a map of id to that number."""
@@ -178,30 +174,33 @@ def number(items: list[dict[str, Any]]) -> dict[int, int]:
     return out
 
 
-_ID_RUN = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+_ID = r"art_[0-9A-Za-z]+"
+_CITATION = re.compile(rf"\s*\(({_ID}(?:\s*,\s*{_ID})*)\)")
 
 
-def renumber(text: str, numbers: dict[int, int], cited: set[int]) -> str:
-    """Tauric's `[id, id]` citations in `text` as the numbers `number` gave the articles (the
-    run's `[N, M]`, or the ids themselves outside a run); a cited article that could not be
-    resolved drops out. Unchanged when no article was numbered."""
+def renumber(text: str, numbers: dict[str, int | str]) -> str:
+    """Tauric's inline `(art_a, art_b)` citations in `text` as the numbers `number` gave the
+    articles (the run's `[N, M]`, or the ids themselves outside a run); a cited article that
+    could not be resolved drops out. Unchanged when no article was numbered."""
     if not numbers:
         return text
 
     def swap(m: re.Match[str]) -> str:
-        ids = [int(x) for x in m.group(1).split(",")]
-        if not any(i in cited for i in ids):
-            return m.group(0)
+        ids = [x.strip() for x in m.group(1).split(",")]
         ns = sorted({numbers[i] for i in ids if i in numbers})
-        return f"[{', '.join(map(str, ns))}]" if ns else ""
+        return f" [{', '.join(map(str, ns))}]" if ns else ""
 
-    return _ID_RUN.sub(swap, text)
+    return _CITATION.sub(swap, text)
 
 
-def cites(x: dict[str, Any]) -> str:
-    """A claim's cited article ids as ` [1, 2]`, or nothing."""
-    ids = x.get("article_ids") or []
-    return f" [{', '.join(map(str, ids))}]" if ids else ""
+def claim(text: str | None, ids: list[str], numbers: dict[str, int | str]) -> str:
+    """A claim's text with its sources' numbers: its inline citations renumbered, or, when it
+    cites none inline, its `article_ids` appended (Tauric's ids when none was numbered)."""
+    text = text or ""
+    if _CITATION.search(text):
+        return renumber(text, numbers)
+    ns = [numbers[i] for i in ids if i in numbers] if numbers else ids
+    return f"{text} [{', '.join(map(str, ns))}]" if ns else text
 
 
 async def dated(api: Tauric, path: str, day: dt.date | None) -> tuple[dict[str, Any], str | None]:
@@ -211,7 +210,7 @@ async def dated(api: Tauric, path: str, day: dt.date | None) -> tuple[dict[str, 
     try:
         return await api.get(path, date=day.isoformat()), None
     except ToolError as err:
-        if err.code != "not_found":
+        if err.code not in NOT_PUBLISHED:
             raise
     body = await api.get(path)
     return body, f"No digest on {day}; this is the latest, {body.get('digest_date')}."

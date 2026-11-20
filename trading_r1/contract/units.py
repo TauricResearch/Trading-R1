@@ -51,9 +51,9 @@ def _finite(v: Any) -> Any:
     return None if isinstance(v, float) and not math.isfinite(v) else v
 
 
-def _real(unit: Unit) -> Any:
+def _real(unit: Unit, kind: Any = float) -> Any:
     return Annotated[
-        float | None, BeforeValidator(_finite), Field(json_schema_extra={"unit": unit.value})
+        kind | None, BeforeValidator(_finite), Field(json_schema_extra={"unit": unit.value})
     ]
 
 
@@ -67,13 +67,9 @@ Fraction = _real(Unit.FRACTION)
 Percent = _real(Unit.PERCENT)
 Points = _real(Unit.POINTS)
 Multiple = _real(Unit.MULTIPLE)
-Count = _real(Unit.COUNT)
+Count = _real(Unit.COUNT, int | float)  # a whole count stays an int
 Number = _real(Unit.NUMBER)
-Exact = Annotated[
-    int | float | None,
-    BeforeValidator(_finite),
-    Field(json_schema_extra={"unit": Unit.EXACT.value}),
-]
+Exact = _real(Unit.EXACT, int | float)
 Day = _string(Unit.DAY)
 Code = _string(Unit.CODE)
 Text = _string(Unit.TEXT)

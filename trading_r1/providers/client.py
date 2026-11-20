@@ -25,6 +25,7 @@ from openai.types.chat.chat_completion_message_tool_call import (
     Function,
 )
 
+from trading_r1 import USER_AGENT
 from trading_r1.providers.adapters import apply_adapter
 from trading_r1.providers.base import DeltaCallback
 from trading_r1.providers.profiles import ModelProfile
@@ -49,6 +50,7 @@ def client_for(profile: ModelProfile) -> AsyncOpenAI:
         base_url=profile.base_url,
         timeout=profile.timeout_s,
         max_retries=0,
+        default_headers={"User-Agent": USER_AGENT},
     )
 
 

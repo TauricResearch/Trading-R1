@@ -26,6 +26,7 @@ from trading_r1.tools.web.visit_fetch import Fetcher
 
 _DEFAULT_MAX_RESULTS = 8
 _OVERFETCH_FACTOR = 2  # pull ~2× candidates so validation can drop the unfetchable
+_RETRY_PAUSE_S = 2.0  # before the one retry of a batch whose queries all came back empty
 _MAX_VALIDATE = 16  # hard cap on pre-fetch validations per call (latency bound)
 _MAX_QUERIES = 5  # a batch's most queries
 _MAX_RESULTS = 20  # most results asked per query
@@ -124,6 +125,11 @@ def build_search_spec(
                     return []
 
         per_query = await asyncio.gather(*(run_query(q) for q in req.queries))
+        # A batch with no results at all is run once more after a pause: the keyless engines
+        # at times answer nothing for a moment.
+        if not any(per_query):
+            await asyncio.sleep(_RETRY_PAUSE_S)
+            per_query = await asyncio.gather(*(run_query(q) for q in req.queries))
 
         seen: set[str] = set()
         candidates: list[dict] = []

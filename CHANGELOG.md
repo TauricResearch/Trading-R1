@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.2] - 2026-11-20
+
+- Market data: every data tool reads Tauric's current data API, so prices, quotes, financials,
+  ownership, news, digests, macro series and rates work again.
+- Market data: when Tauric says an answer is incomplete, the tool says so with Tauric's reason;
+  values Tauric marks provisional are named.
+- Market data: a value that is empty for a reason Tauric gives is stated with that reason, and
+  with "ask again later" when it may come later (such as a next earnings date not announced
+  yet).
+- Market data: a period the source did not publish (such as CPI for October 2025) is named as
+  not published, not as incomplete.
+- Prices: the hourly interval is `1h`; long daily histories are read a year at a time.
+- Session sync reads your account's sessions and storage as Tauric serves them, so restore and
+  `trading-r1 sync pull` work again.
+- Requests to Tauric name the app and its version.
+- Terminal: it does not attach to a running backend of another version; it says which version
+  runs and how to update it.
+- Terminal: the Model and Mode pickers mark the current item with a check mark.
+- Terminal: warnings from Python libraries go to the log file instead of over the screen.
+- Web search: a search whose queries all come back empty is run once more after a short pause.
+
 ## [0.1.1] - 2026-11-09
 
 - Reports: the PDF is set in Noto Sans, with Noto Sans SC and KR, so it draws Chinese, Japanese

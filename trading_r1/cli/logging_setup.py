@@ -64,9 +64,12 @@ def configure_logging(*, to_file: bool = False) -> None:
     # own stderr handlers, so redirecting only our logger would still let the in-process
     # server garble the display. Replacing each logger's handlers, plus log_config=None on
     # the server, keeps stderr clean.
+    # Python warnings (such as a dependency's SyntaxWarning when its modules are first
+    # compiled) are written to stderr too, so in file mode they are routed to the log as well.
     names = ["trading_r1"]
     if to_file:
-        names += ["uvicorn", "uvicorn.error", "uvicorn.access"]
+        names += ["uvicorn", "uvicorn.error", "uvicorn.access", "py.warnings"]
+        logging.captureWarnings(True)
     for name in names:
         logger = logging.getLogger(name)
         logger.setLevel(level)

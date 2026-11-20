@@ -3,9 +3,10 @@
 
 """data.market.movers: the session's biggest US stock movers, without names in hand.
 
-Tauric ranks its maintained US listings (common shares and ADRs) by the day's change or share
+Tauric ranks the US listings it serves (common shares and ADRs) by the day's change or share
 volume; a quote needs a name first, this finds the names. One list per call, as Tauric ranks it,
-with the universe it ranked and the session it covers: before the open that is the last session.
+with how many stocks it measured and the session it covers: before the open that is the last
+session.
 """
 
 from __future__ import annotations
@@ -18,11 +19,12 @@ from trading_r1.contract.spec import Output, Provenance, Result, ToolError, Tool
 from trading_r1.contract.units import Code, Count, Day, Money, Percent, Price, Text
 from trading_r1.tools.data.tauric import Tauric, provenance
 
-_MAX_ROWS = 20  # Tauric's most movers per response
+_MAX_ROWS = 25  # Tauric's most movers per response
 _DESCRIPTION = (
     "The session's biggest US stock movers: gainers, losers or the most active by share volume, "
-    "ranked by Tauric across its maintained US common shares and ADRs (ETFs are not ranked; "
-    "`universe` and `members` say what was). One list per call, each row with rank, symbol, name, "
+    "ranked by Tauric across the US common shares and ADRs it serves (ETFs are not ranked; "
+    "`requested` counts the stocks served, `measured` those ranked, `missing_by_reason` why the "
+    "rest were not). One list per call, each row with rank, symbol, name, "
     "price, day change (in percent as published), volume, average volume and market cap. "
     "`session_date` is the session ranked: before the open, the last one. For names already in "
     "hand use data.market.quotes; for sectors, data.market.sectors."
@@ -52,28 +54,36 @@ class Mover(BaseModel):
     market_state: Code = None  # regular, pre_market, post_market, closed
 
 
+class Missing(BaseModel):
+    reason: Code = None
+    count: Count
+
+
 class MoversOutput(Output):
-    """One ranked list for a session; `universe` is what Tauric ranks, `members` its size,
-    `ranked` those with a confirmed quote, and `qualifying` those that fit this list."""
+    """One ranked list for a session; `requested` is the stocks Tauric serves, `measured` those
+    it ranked, `missing_by_reason` the rest counted by Tauric's reason, and `qualifying` those that
+    fit this list."""
 
     view: Code
     session_date: Day = None
-    members: Count = None
-    ranked: Count = None
+    requested: Count = None
+    measured: Count = None
     qualifying: Count = None
-    universe: Text = None
+    missing_by_reason: list[Missing] = []
     movers: Annotated[list[Mover], hint(rows=_MAX_ROWS)]
+    notes: list[Text] = []
 
 
 def _mover(q: dict[str, Any]) -> Mover:
     inst = q.get("instrument") or {}
+    change = q.get("change") or {}
     return Mover(
         rank=q.get("rank"),
         symbol=(inst.get("key") or "").removeprefix("security:"),
         name=inst.get("name"),
         price=q.get("price"),
-        change=q.get("change"),
-        change_pct=q.get("change_percent"),
+        change=change.get("absolute"),
+        change_pct=change.get("percent"),
         volume=(q.get("day") or {}).get("volume"),
         avg_volume=q.get("avg_volume"),
         market_cap=q.get("market_cap"),
@@ -92,11 +102,12 @@ async def _handler(req: MoversRequest) -> Result:
     out = MoversOutput(
         view=req.view,
         session_date=body.get("session_date"),
-        members=population.get("members"),
-        ranked=population.get("ranked"),
+        requested=population.get("requested"),
+        measured=population.get("measured"),
         qualifying=body.get("qualifying"),
-        universe=population.get("definition"),
+        missing_by_reason=population.get("missing_by_reason") or [],
         movers=[_mover(q) for q in rows],
+        notes=api.limits,
     )
     return Result(
         out,
