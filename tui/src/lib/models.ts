@@ -16,8 +16,8 @@ export function statusLine(m: ModelInfo): string {
 }
 
 /** Build the `/model` picker options. The header is the provider/runtime (Tauric / OpenAI /
- *  Google / vLLM / Ollama); the model name + live status sit underneath. A dot marks the
- *  session-active model: the selection this session, else the server default. Only a
+ *  Google / vLLM / Ollama); the model name + live status sit underneath. A check mark shows
+ *  the session-active model: the selection this session, else the server default. Only a
  *  *ready* backbone is selectable (disabled rows still explain what to fix on select). */
 export function modelOptions(
   models: ModelInfo[],
@@ -26,8 +26,8 @@ export function modelOptions(
 ): ListOption[] {
   const active = selected ?? serverDefault ?? undefined
   return models.map((m) => ({
-    name: `${m.name === active ? "●" : " "} ${m.provider_label}`,
-    description: `  ${statusLine(m)}`, // aligned under the name, past the current-model dot
+    name: `${m.name === active ? "✓" : " "} ${m.provider_label}`,
+    description: `  ${statusLine(m)}`, // aligned under the name, past the current-model mark
     value: m.name,
     disabled: !m.ready,
   }))

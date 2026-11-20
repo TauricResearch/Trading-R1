@@ -26,10 +26,10 @@ const MODE_HELP: Record<Mode, string> = {
   analytical: "Numbers first: data and valuation tools, the web for context",
 }
 
-/** The Mode picker's rows: the current one marked with a dot. */
+/** The Mode picker's rows: the current one marked with a check mark. */
 export function modeOptions(current: Mode): { name: string; description: string; value: string }[] {
   return MODES.map((m) => ({
-    name: `${m === current ? "●" : " "} ${m}`,
+    name: `${m === current ? "✓" : " "} ${m}`,
     description: `  ${MODE_HELP[m]}`,
     value: m,
   }))
