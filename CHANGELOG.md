@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3] - 2026-11-25
+
+- Terminal: `/copy` copies the answer on your machine, inside tmux and over SSH, and says when it
+  could not.
+- Terminal: pickers and questions cut long text to the dialog's width with "…", counting wide
+  characters such as Chinese as two columns; so do tool arguments in the transcript.
+- Sessions: a title is the first question on one line, at most 80 characters.
+- A rate limit is waited out as long as the provider asks, up to a minute; a spent quota fails at
+  once with the provider's message, which says when it resets.
+- Tauric model: an answer can be up to 32,768 tokens long.
+- New sessions get time-ordered ids (UUID v7); existing sessions keep theirs.
+
 ## [0.1.2] - 2026-11-20
 
 - Market data: every data tool reads Tauric's current data API, so prices, quotes, financials,
