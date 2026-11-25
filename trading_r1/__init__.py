@@ -5,5 +5,5 @@
 market-data, compute and web tools.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 USER_AGENT = f"trading-r1/{__version__}"  # sent on every request to Tauric and model APIs

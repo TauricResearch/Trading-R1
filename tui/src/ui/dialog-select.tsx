@@ -17,6 +17,7 @@ import { FREE_TEXT_VALUE, buildOptions } from "../lib/ask-user"
 import { keyHint } from "../lib/hints"
 import { layout, selectColors, theme } from "../theme"
 import { Field } from "./field"
+import { fitRows } from "./list-dialog"
 import { Modal } from "./modal"
 
 export function DialogSelect(props: {
@@ -69,7 +70,7 @@ export function DialogSelect(props: {
       >
         <select
           focused
-          options={options()}
+          options={fitRows(options(), layout.width.lg)}
           height={Math.min(options().length * 2, 12)}
           showDescription
           showScrollIndicator={options().length > 6}

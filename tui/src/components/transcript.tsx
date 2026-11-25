@@ -23,6 +23,7 @@ import {
 } from "@opentui/core"
 
 import { formatCitations } from "../lib/citations"
+import { fitColumns } from "../lib/format"
 import { type ToolDetails } from "../lib/settings"
 import {
   type ReasoningPart,
@@ -55,7 +56,7 @@ function argLabel(v: unknown): string {
 }
 
 /** A tool's arguments on one line: brief is the values alone (queries, urls, goal), cut at 56
- *  characters; full is every argument by name. */
+ *  columns; full is every argument by name. */
 function formatArgs(args: Record<string, unknown>, details: ToolDetails): string {
   if (details === "full") {
     return Object.entries(args)
@@ -63,7 +64,7 @@ function formatArgs(args: Record<string, unknown>, details: ToolDetails): string
       .join(", ")
   }
   const s = Object.values(args).map(argLabel).filter(Boolean).join(" / ")
-  return s.length > 56 ? s.slice(0, 55) + "…" : s
+  return fitColumns(s, 56)
 }
 
 /** update_plan is a UI tool: a terse summary here; the live checklist is the rail Plan panel. */

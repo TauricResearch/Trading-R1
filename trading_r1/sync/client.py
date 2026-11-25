@@ -235,7 +235,7 @@ class ArchiveClient:
         ``details`` for listing and filtering. Returns its metadata."""
         metadata = {k: v[:512] for k, v in (details or {}).items() if v}
         if label:
-            metadata["label"] = label[:200]
+            metadata["label"] = label
         body = {"metadata": metadata, "parent": parent}
         return _view((await self._call("PUT", self._session(session_id), json=body)).json())
 
