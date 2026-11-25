@@ -10,6 +10,7 @@
  */
 import { useKeyboard } from "@opentui/solid"
 
+import { fitColumns } from "../lib/format"
 import { type EscapeMeans, keyHint } from "../lib/hints"
 import { layout, selectColors, theme } from "../theme"
 import { Modal } from "./modal"
@@ -19,6 +20,22 @@ export interface ListOption {
   description: string // the muted sub-label (the native <select> requires it)
   value: string
   disabled?: boolean
+}
+
+/** The columns a row's text gets in a select inside a modal `width` wide: the border, the
+ *  inset, the selection marker and the scroll bar take the rest. */
+export function rowColumns(width: number): number {
+  return width - 2 - 2 * layout.pad.modal.x - 3 - 1
+}
+
+/** The options with their name and description cut to the row, ending with "…" when cut. */
+export function fitRows<T extends { name: string; description: string }>(options: T[], width: number): T[] {
+  const cols = rowColumns(width)
+  return options.map((o) => ({
+    ...o,
+    name: fitColumns(o.name, cols),
+    description: fitColumns(o.description, cols),
+  }))
 }
 
 export function ListDialog(props: {
@@ -38,11 +55,12 @@ export function ListDialog(props: {
   // each option renders on two lines (name + description), so size for that;
   // otherwise only the first row shows and the rest need scrolling to reveal.
   const height = () => Math.min(Math.max(props.options.length * 2, 2), 14)
+  const width = () => props.width ?? layout.width.md
   return (
-    <Modal width={props.width ?? layout.width.md} title={props.title}>
+    <Modal width={width()} title={props.title}>
       <select
         focused
-        options={props.options}
+        options={fitRows(props.options, width())}
         selectedIndex={props.selected ?? 0}
         height={height()}
         showDescription

@@ -1,7 +1,24 @@
 // Copyright 2026 Tauric Research
 // SPDX-License-Identifier: Apache-2.0
 
-/** How numbers and times are written on screen. Pure. */
+/** How numbers, times and text are written on screen. Pure. */
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+/** `text` cut to `cols` display columns (wide characters such as CJK take two), ending with
+ *  "…" when cut. */
+export function fitColumns(text: string, cols: number): string {
+  if (Bun.stringWidth(text) <= cols) return text
+  if (cols <= 0) return ""
+  let out = ""
+  let room = cols - 1
+  for (const { segment } of graphemes.segment(text)) {
+    room -= Bun.stringWidth(segment)
+    if (room < 0) break
+    out += segment
+  }
+  return `${out.trimEnd()}…`
+}
 
 /** A context-meter token count in thousands: `131072` -> `131k`. */
 export function tokensK(n: number): string {
