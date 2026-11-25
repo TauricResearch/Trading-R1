@@ -601,9 +601,9 @@ function AppInner() {
     const fromWelcome = view() === "welcome"
     setRunning(true)
     abort = new AbortController() // esc cancels this run (aborts the SSE fetch)
-    // A fresh session starts a new id; follow-ups reuse it so the backend threads
-    // the prior turns' history.
-    if (fromWelcome || !sessionId) sessionId = crypto.randomUUID()
+    // A fresh session starts a new id (UUID v7); follow-ups reuse it so the backend
+    // threads the prior turns' history.
+    if (fromWelcome || !sessionId) sessionId = Bun.randomUUIDv7()
     // Immediate feedback: swap to the research view and append the running turn the
     // instant the user hits enter.
     setView("research")
