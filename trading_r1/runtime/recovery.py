@@ -5,7 +5,8 @@
 
 Decides what to do when a model call doesn't cleanly succeed:
   - truncation (``finish_reason == "length"``) -> escalate ``max_tokens``
-  - transient (429/5xx/timeout/connection) -> exponential backoff + retry
+  - transient (429/5xx/timeout/connection) -> exponential backoff (at least the server's
+    ``Retry-After``) + retry; a 429 for a spent quota is fatal, its message names the reset
   - context overflow (400 + the provider's overflow signature) -> compact the prompt + retry
   - malformed generation (other 400) -> regenerate (re-roll, temperature > 0)
   - fatal (401/403/404/bug) -> stop, fail fast

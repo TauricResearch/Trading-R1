@@ -7,8 +7,9 @@ Base URL and key come from the `tauric` provider profile (so a machine's overrid
 backbone's endpoint applies to its data too; the profile's base ends in `/v1`). A request opens
 no global state: `Tauric` is an async context manager scoping one connection pool, shared by the
 pages of one tool call. Transient failures (timeouts, 429, 5xx) retry under the runtime's
-policy; every other failure becomes a `ToolError` carrying Tauric's own message, which already
-says what to use instead ("use this key", "the standard pair is BTC-USDT"), and its `code` and
+policy, after the `Retry-After` Tauric sends; a spent quota is not retried. Every other failure
+becomes a `ToolError` carrying Tauric's own message, which already says what to use instead
+("use this key", "the standard pair is BTC-USDT", when a quota resets), and its `code` and
 `retry`. A failure with no answer from Tauric can pass with time: its `retry` is `later`. Limits
 Tauric states on the data it returns are kept in `limits` for the tool's notes (`stated_limits`),
 with Tauric's reason for each null value the tool read (`unavailable`). A successful answer
@@ -22,7 +23,7 @@ from typing import Any
 
 from trading_r1 import USER_AGENT
 from trading_r1.contract.spec import ToolError
-from trading_r1.runtime.retry import RETRYABLE_STATUS, is_transient_http, with_retry
+from trading_r1.runtime.retry import RETRYABLE_STATUS, is_quota, is_transient_http, with_retry
 from trading_r1.state.runtime_config import runtime_config
 from trading_r1.tools.data.reuse import REUSE, key_for, lifetime
 
@@ -290,7 +291,7 @@ class Tauric:
 
         async def once() -> Any:
             resp = await self._client.request(method, path, **kwargs)
-            if resp.status_code in RETRYABLE_STATUS:
+            if resp.status_code in RETRYABLE_STATUS and not is_quota(resp):
                 resp.raise_for_status()
             return resp
 

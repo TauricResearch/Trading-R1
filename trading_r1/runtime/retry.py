@@ -4,8 +4,9 @@
 """Retry helper for tool handlers + the shared transient-error taxonomy.
 
 Wraps an async-callable factory; absorbs transient failures (timeouts, transport
-blips, rate limits, transient 5xx) before they reach the LLM. Actionable errors
-(bad ticker, schema mismatch, auth) bubble through immediately.
+blips, rate limits, transient 5xx) before they reach the LLM, waiting at least the
+server's `Retry-After` when it sends one. Actionable errors (bad ticker, schema
+mismatch, auth, a spent quota) bubble through immediately.
 """
 
 from __future__ import annotations
@@ -13,12 +14,44 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+# A 429 that names a spent quota: it lasts until the quota resets, so it is not retried.
+QUOTA_CODES = frozenset({"quota_exhausted", "insufficient_quota"})
+RETRY_AFTER_CAP_S = 60.0  # the longest a server's `Retry-After` is waited for
 
 
 class RetryableError(Exception):
     """Explicit caller signal that an error is transient."""
+
+
+def error_code(err: BaseException | Any) -> str | None:
+    """The `error.code` of a failed answer: an SDK error's `code`, or the JSON body of an
+    httpx error or response."""
+    code = getattr(err, "code", None)
+    if isinstance(code, str):
+        return code
+    response = getattr(err, "response", err)
+    try:
+        body = response.json()["error"]
+    except Exception:  # noqa: BLE001 (no body, not JSON, or no error envelope)
+        return None
+    return body.get("code") if isinstance(body, dict) else None
+
+
+def is_quota(err: BaseException | Any) -> bool:
+    """Whether a failure, or an httpx response, is a spent quota."""
+    return error_code(err) in QUOTA_CODES
+
+
+def retry_after_s(err: BaseException) -> float | None:
+    """The server's `Retry-After` in seconds (capped at `RETRY_AFTER_CAP_S`), when it sent one."""
+    headers = getattr(getattr(err, "response", None), "headers", None)
+    try:
+        return min(max(float(headers["retry-after"]), 0.0), RETRY_AFTER_CAP_S)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def status_of(err: BaseException) -> int | None:
@@ -39,6 +72,8 @@ def is_default_retryable(err: BaseException) -> bool:
         return True
     if isinstance(err, asyncio.TimeoutError | TimeoutError | ConnectionError):
         return True
+    if is_quota(err):
+        return False
     status = status_of(err)
     return status is not None and status in RETRYABLE_STATUS
 
@@ -93,9 +128,8 @@ async def with_retry[T](
             last_error = err
             if not retryable(err) or attempt == max_attempts - 1:
                 raise
-            await asyncio.sleep(
-                backoff_delay(
-                    attempt, base_delay_s=base_delay_s, max_delay_s=max_delay_s, jitter=jitter
-                )
+            delay = backoff_delay(
+                attempt, base_delay_s=base_delay_s, max_delay_s=max_delay_s, jitter=jitter
             )
+            await asyncio.sleep(max(delay, retry_after_s(err) or 0.0))
     raise last_error  # type: ignore[misc]  # unreachable

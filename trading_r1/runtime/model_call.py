@@ -31,7 +31,7 @@ from trading_r1.runtime.context_budget import (
     over_budget,
     window_of,
 )
-from trading_r1.runtime.retry import backoff_delay
+from trading_r1.runtime.retry import backoff_delay, retry_after_s
 from trading_r1.runtime.session import recorder
 from trading_r1.state.runtime_config import RuntimeConfig
 
@@ -93,7 +93,7 @@ class Budget:
                     jitter=cfg.backoff.jitter,
                 )
                 self.transient += 1
-                return Step("retry", delay)
+                return Step("retry", max(delay, retry_after_s(err) or 0.0))
             case recovery.REGENERATE if self.regenerated < cfg.limits.max_regenerate_retries:
                 self.regenerated += 1
                 return Step("retry")
