@@ -83,7 +83,7 @@ BUILTIN_PROVIDERS: tuple[BuiltinProvider, ...] = (
             "base_url": _TAURIC_BASE_URL,
             "api_key_env": "TAURIC_API_KEY",
             "reader_profile": "tauric",
-            "output_limit": 16384,  # the inference API's ceiling per request
+            "output_limit": 32768,  # the inference API's ceiling per request
             "context_window": 262144,  # not reported by the API
         },
     ),
