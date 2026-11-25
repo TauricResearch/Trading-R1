@@ -18,7 +18,9 @@ treats indexing as best-effort: the log is already written when it runs.
 
 from __future__ import annotations
 
+import re
 import sqlite3
+import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -37,12 +39,22 @@ CREATE TABLE IF NOT EXISTS sessions (
     log_size INTEGER
 );
 CREATE INDEX IF NOT EXISTS sessions_updated ON sessions (updated_at);
+-- titles are one line
 """
 
 
+# bidirectional controls, which can make a title read other than it is
+_BIDI = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
 def title(question: str) -> str:
-    q = question.strip()
-    return (q[:_TITLE_MAX] + ("…" if len(q) > _TITLE_MAX else "")) or "(untitled)"
+    """A session's title: its first question on one line (each run of whitespace one space,
+    control characters dropped), cut to 80 characters."""
+    q = "".join(" " if unicodedata.category(c) == "Cc" else c for c in _BIDI.sub("", question))
+    q = " ".join(q.split())
+    if len(q) > _TITLE_MAX:
+        q = q[:_TITLE_MAX].rstrip() + "…"
+    return q or "(untitled)"
 
 
 class SessionIndex:
