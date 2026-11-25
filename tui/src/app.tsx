@@ -51,6 +51,7 @@ import {
 import { InputHistory } from "./lib/input-history"
 import { contextMeter, mergeUsage } from "./lib/context"
 import { day, tokensK } from "./lib/format"
+import { copiedText, copyText, systemWays } from "./lib/clipboard"
 import { loader } from "./lib/load"
 import { type SyncStatus, syncGlyph, syncLines } from "./lib/sync"
 import { DEFAULT_PREFS, SETTING_ROWS, nextValue, prefsFrom } from "./lib/settings"
@@ -268,13 +269,18 @@ function AppInner() {
 
   // ----- palette commands ------------------------------------------------- //
 
-  // /copy: the answer to the system clipboard via OSC 52 (works over SSH).
+  // /copy: the answer to the clipboard (lib/clipboard.ts), saying whether it was copied.
   function copyAnswer() {
     const text = lastAnswer()
     if (!text) return
-    const b64 = Buffer.from(text, "utf8").toString("base64")
-    process.stdout.write(`\x1b]52;c;${b64}\x07`)
-    notify("Answer copied to the clipboard")
+    notify(
+      copiedText(
+        copyText(
+          text,
+          systemWays((t) => renderer.copyToClipboardOSC52(t)),
+        ),
+      ),
+    )
   }
 
   // /export: the report as a page (html), as markdown, and the full trajectory (json), to cwd.
